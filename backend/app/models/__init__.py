@@ -230,14 +230,21 @@ from .inventario import (
 
 # Importar modelos de almacén
 from .warehouse import (
-    Almacen, UbicacionAlmacen, StockUbicacion, TransferenciaAlmacen,
-    TipoTransferenciaEnum
+    Warehouse as Almacen,
+    WarehouseLocation as UbicacionAlmacen,
+    StockLevel as StockUbicacion,
+    WarehouseTransfer as TransferenciaAlmacen,
+    WarehouseTransferItem as ItemTransferenciaAlmacen,
+    StockMovement as MovimientoStock
 )
 
 # Importar modelos de compras
 from .purchase import (
-    Proveedor, OrdenCompra, RecepcionOrden, CuentaPagar,
-    EstadoOrdenEnum, EstadoCuentaEnum
+    Supplier as Proveedor,
+    PurchaseOrder as OrdenCompra,
+    PurchaseOrderItem as ItemOrdenCompra,
+    AccountsPayable as CuentaPagar,
+    OrderStatus as EstadoOrdenEnum
 )
 
 # Importar modelos de CRM

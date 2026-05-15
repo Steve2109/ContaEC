@@ -7,7 +7,7 @@ from sqlalchemy.orm import relationship
 from datetime import datetime
 import enum
 
-from app.database.base_class import Base
+from app.core.database import Base
 
 class BankStatement(Base):
     __tablename__ = "bank_statements"

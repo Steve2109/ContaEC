@@ -1,24 +1,19 @@
 ```
 # Dependencies
+.venv/
+venv/
 __pycache__/
 *.pyc
 *.pyo
 *.pyd
-node_modules/
-.venv/
-venv/
-env/
 
 # Build artifacts
 dist/
 build/
 *.egg-info/
-.tox/
-.coverage
-htmlcov/
-.mypy_cache/
-.pytest_cache/
-.hypothesis/
+
+# Logs
+*.log
 
 # Environment variables
 .env
@@ -30,21 +25,17 @@ htmlcov/
 .idea/
 *.swp
 *.swo
-*~
 
-# OS files
+# Coverage reports
+.coverage
+coverage/
+htmlcov/
+
+# OS generated files
 .DS_Store
 Thumbs.db
 
-# Logs
-*.log
-
-# Compressed files
-*.zip
-*.tar.gz
-*.tar.bz2
-*.tar.xz
-*.gz
-*.rar
-*.7z
+# Testing
+.pytest_cache/
+.mypy_cache/
 ```
