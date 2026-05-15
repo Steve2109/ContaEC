@@ -20,7 +20,8 @@ from app.models.facturacion import (
     TipoContribuyenteEnum, RegimenTributarioEnum
 )
 from app.services.facturacion_service import GeneradorClaveAcceso, ConsultaSRI
-from app.core.security import get_current_user, encrypt_sensitive_data as encrypt_data
+from app.utils.dependencies import get_current_user
+from app.core.security import encrypt_sensitive_data as encrypt_data
 from app.core.dependencies import get_current_empresa
 
 router = APIRouter(prefix="/facturacion", tags=["Facturación Electrónica"])

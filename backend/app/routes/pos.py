@@ -7,7 +7,7 @@ from typing import List, Optional
 from datetime import datetime
 
 from app.database.session import get_db
-from app.core.security import get_current_user, verify_company_access
+from app.utils.dependencies import get_current_user, verify_company_access
 from app.models.user import User
 from app.models.company import Company
 from app.models.product import Product

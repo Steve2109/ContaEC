@@ -18,7 +18,7 @@ from app.models.inventario import (
 )
 from app.services.inventario_service import InventarioService, ImportacionExportacionService
 from app.services.file_security_service import FileSecurityService
-from app.core.security import get_current_user
+from app.utils.dependencies import get_current_user
 from app.core.dependencies import get_current_empresa
 
 router = APIRouter(prefix="/inventario", tags=["Inventario"])
