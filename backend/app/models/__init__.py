@@ -1,12 +1,12 @@
 """
 Modelos de base de datos para ContaEC
-Fase 1-2: Usuarios, Empresas, Licencias, Configuración
+Fase 1-3: Usuarios, Empresas, Licencias, Configuración + Facturación Electrónica
 """
 from sqlalchemy import Column, Integer, String, Boolean, DateTime, ForeignKey, Text, Float, Enum as SQLEnum, JSON
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 import enum
-from .database import Base
+from app.core.database import Base
 
 
 class UserRole(str, enum.Enum):

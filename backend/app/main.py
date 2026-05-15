@@ -13,8 +13,10 @@ import os
 from .core.config import settings
 from .core.database import engine, Base, get_db
 from .api import auth, admin, files
+from .routes import facturacion
 from .services.auth_service import UserService, LicenseService
 from .models import User, License, LicenseType
+from .models.facturacion import EmpresaConfiguracion, CertificadoDigital, Cliente, ProductoServicio, ComprobanteElectronico
 from datetime import datetime, timedelta
 
 
@@ -127,6 +129,7 @@ async def global_exception_handler(request: Request, exc: Exception):
 app.include_router(auth.router)
 app.include_router(admin.router)
 app.include_router(files.router)
+app.include_router(facturacion.router)
 
 
 # Rutas básicas
