@@ -205,3 +205,67 @@ class MalwareScanLog(Base):
     scanner = Column(String(50), nullable=False)  # CLAMAV, VIRUSTOTAL
     threat_name = Column(String(255))
     scanned_at = Column(DateTime(timezone=True), server_default=func.now())
+
+# Importar modelos de nómina para registro en Base
+from .nomina import (
+    Employee, EmployeeContract, PayrollPeriod, PayrollRecord,
+    PayrollEarning, PayrollDeduction, EmployeeLoan, EmployeeEvaluation,
+    AttendanceRecord, RDEPRecord, IESSBatch
+)
+
+# Importar modelos de facturación electrónica SRI
+from .facturacion import (
+    EmpresaConfiguracion, CertificadoDigital, Cliente, ProductoServicio,
+    ComprobanteElectronico, ComprobanteDetalle, ComprobanteImpuesto,
+    ComprobanteRetencion, GuiaRemision, Proforma, LogSRI,
+    TipoComprobanteEnum, EstadoComprobanteEnum, TipoIVAEnum,
+    TipoContribuyenteEnum, RegimenTributarioEnum, TipoRetencionEnum
+)
+
+# Importar modelos de inventario
+from .inventario import (
+    CategoriaProducto, Producto, MovimientoInventario,
+    TipoMovimientoEnum
+)
+
+# Importar modelos de almacén
+from .warehouse import (
+    Almacen, UbicacionAlmacen, StockUbicacion, TransferenciaAlmacen,
+    TipoTransferenciaEnum
+)
+
+# Importar modelos de compras
+from .purchase import (
+    Proveedor, OrdenCompra, RecepcionOrden, CuentaPagar,
+    EstadoOrdenEnum, EstadoCuentaEnum
+)
+
+# Importar modelos de CRM
+from .crm import (
+    Lead, Oportunidad, PipelineVenta, SeguimientoCRM,
+    EstadoLeadEnum, EtapaPipelineEnum
+)
+
+# Importar modelos de proyectos
+from .projects import (
+    Proyecto, TareaProyecto, Timesheet, RecursoProyecto,
+    EstadoProyectoEnum, PrioridadEnum
+)
+
+# Importar modelos de integraciones
+from .integrations import (
+    ConexionBancaria, ExtractoBancario, IntegracionEcommerce,
+    TipoIntegracionEnum
+)
+
+# Importar modelos de presupuestos
+from .budget import (
+    PresupuestoAnual, LineaPresupuestaria, EjecucionPresupuesto,
+    EstadoPresupuestoEnum
+)
+
+# Importar modelos de IA/ML
+from .ai import (
+    PrediccionVenta, DeteccionFraude, CategoriaAutomatica,
+    TipoAnalisisEnum
+)

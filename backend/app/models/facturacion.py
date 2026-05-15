@@ -169,6 +169,7 @@ class Cliente(Base):
     # Relaciones
     empresa = relationship("Empresa", back_populates="clientes")
     facturas = relationship("ComprobanteElectronico", back_populates="cliente")
+    proformas = relationship("Proforma", back_populates="cliente", cascade="all, delete-orphan")
 
 
 class ProductoServicio(Base):
@@ -286,7 +287,8 @@ class ComprobanteDetalle(Base):
     __tablename__ = "comprobantes_detalles"
     
     id = Column(Integer, primary_key=True, index=True)
-    comprobante_id = Column(Integer, ForeignKey("comprobantes_electronicos.id"), nullable=False)
+    comprobante_id = Column(Integer, ForeignKey("comprobantes_electronicos.id"), nullable=True)  # Nullable para proformas
+    proforma_id = Column(Integer, ForeignKey("proformas.id"), nullable=True)  # Nuevo campo para proformas
     producto_id = Column(Integer, ForeignKey("productos_servicios.id"))
     
     # Datos del item
@@ -311,8 +313,9 @@ class ComprobanteDetalle(Base):
     precio_total_sin_impuestos = Column(Float, default=0.0)
     precio_total_con_impuestos = Column(Float, default=0.0)
     
-    # Relación
+    # Relaciones
     comprobante = relationship("ComprobanteElectronico", back_populates="detalles")
+    proforma = relationship("Proforma", back_populates="detalles")
     producto = relationship("ProductoServicio")
 
 
@@ -395,6 +398,49 @@ class GuiaRemision(Base):
     
     # Relación
     empresa = relationship("Empresa")
+
+
+class Proforma(Base):
+    """Proformas (no tributario, solo referencial)"""
+    __tablename__ = "proformas"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    empresa_id = Column(Integer, ForeignKey("empresas.id"), nullable=False)
+    cliente_id = Column(Integer, ForeignKey("clientes.id"))
+    
+    # Numeración interna
+    secuencial = Column(String(9), nullable=False)
+    
+    # Fechas
+    fecha_emision = Column(DateTime, default=datetime.utcnow)
+    fecha_validez = Column(DateTime)  # Fecha límite de validez de la proforma
+    
+    # Totales
+    subtotal = Column(Float, default=0.0)
+    descuento = Column(Float, default=0.0)
+    total_iva = Column(Float, default=0.0)
+    total_ice = Column(Float, default=0.0)
+    total_con_impuestos = Column(Float, default=0.0)
+    
+    # Estado
+    estado = Column(String(20), default="vigente")  # vigente, aceptada, rechazada, expirada, convertida_factura
+    
+    # Observaciones
+    observaciones = Column(Text)
+    condiciones_comerciales = Column(Text)  # Términos de pago, entrega, etc.
+    
+    # Referencia a factura si se convierte
+    comprobante_id = Column(Integer, ForeignKey("comprobantes_electronicos.id"), nullable=True)
+    
+    # Auditoría
+    creado_en = Column(DateTime, default=datetime.utcnow)
+    actualizado_en = Column(DateTime, onupdate=datetime.utcnow)
+    
+    # Relaciones
+    empresa = relationship("Empresa")
+    cliente = relationship("Cliente", back_populates="proformas")
+    detalles = relationship("ComprobanteDetalle", back_populates="proforma", cascade="all, delete-orphan")
+    comprobante = relationship("ComprobanteElectronico")
 
 
 class LogSRI(Base):
