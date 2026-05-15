@@ -15,7 +15,7 @@ from app.models import User, Company as Empresa
 from app.models.facturacion import (
     EmpresaConfiguracion, CertificadoDigital, Cliente, ProductoServicio,
     ComprobanteElectronico, ComprobanteDetalle, ComprobanteImpuesto,
-    ComprobanteRetencion, GuiaRemision, LogSRI,
+    ComprobanteRetencion, GuiaRemision, Proforma, LogSRI,
     TipoComprobanteEnum, EstadoComprobanteEnum, TipoIVAEnum,
     TipoContribuyenteEnum, RegimenTributarioEnum
 )
@@ -127,7 +127,7 @@ class ConfiguracionSRIUpdate(BaseModel):
 async def crear_cliente(
     cliente: ClienteCreate,
     db: Session = Depends(get_db),
-    usuario: Usuario = Depends(get_current_user),
+    usuario: User = Depends(get_current_user),
     empresa: Empresa = Depends(get_current_empresa)
 ):
     """Crear un nuevo cliente"""
@@ -287,8 +287,8 @@ async def actualizar_configuracion_sri(
 @router.post("/configuracion-sri/certificado/")
 async def cargar_certificado(
     certificado_file: UploadFile = File(...),
-    clave: str = Field(..., description="Clave del certificado"),
-    clave_encriptacion: str = Field(..., description="Clave maestra de encriptación"),
+    clave: str = Form(..., description="Clave del certificado"),
+    clave_encriptacion: str = Form(..., description="Clave maestra de encriptación"),
     db: Session = Depends(get_db),
     empresa: Empresa = Depends(get_current_empresa)
 ):
@@ -368,7 +368,7 @@ async def crear_factura(
     factura_data: FacturaCreate,
     background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
-    usuario: Usuario = Depends(get_current_user),
+    usuario: User = Depends(get_current_user),
     empresa: Empresa = Depends(get_current_empresa)
 ):
     """Crear una nueva factura electrónica"""
@@ -595,3 +595,161 @@ async def listar_regimenes():
             {"codigo": "exento", "nombre": "Exento"}
         ]
     }
+
+
+# ==================== PROFORMAS ====================
+
+@router.post("/proformas/", status_code=status.HTTP_201_CREATED)
+async def crear_proforma(
+    proforma_data: dict,
+    db: Session = Depends(get_db),
+    empresa: Empresa = Depends(get_current_empresa),
+    current_user: User = Depends(get_current_user)
+):
+    """Crear una nueva proforma (no tributario)"""
+    from sqlalchemy import func
+    
+    # Obtener siguiente secuencial
+    ultimo_secuencial = db.query(func.max(Proforma.secuencial)).filter(
+        Proforma.empresa_id == empresa.id
+    ).scalar() or "000000000"
+    
+    nuevo_secuencial = str(int(ultimo_secuencial) + 1).zfill(9)
+    
+    # Crear proforma
+    proforma = Proforma(
+        empresa_id=empresa.id,
+        cliente_id=proforma_data.get("cliente_id"),
+        secuencial=nuevo_secuencial,
+        fecha_validez=proforma_data.get("fecha_validez"),
+        subtotal=proforma_data.get("subtotal", 0.0),
+        descuento=proforma_data.get("descuento", 0.0),
+        total_iva=proforma_data.get("total_iva", 0.0),
+        total_ice=proforma_data.get("total_ice", 0.0),
+        total_con_impuestos=proforma_data.get("total_con_impuestos", 0.0),
+        observaciones=proforma_data.get("observaciones"),
+        condiciones_comerciales=proforma_data.get("condiciones_comerciales")
+    )
+    
+    db.add(proforma)
+    db.commit()
+    db.refresh(proforma)
+    
+    # Agregar detalles si existen
+    detalles_data = proforma_data.get("detalles", [])
+    for item in detalles_data:
+        detalle = ComprobanteDetalle(
+            proforma_id=proforma.id,
+            producto_id=item.get("producto_id"),
+            codigo_principal=item.get("codigo_principal"),
+            descripcion=item.get("descripcion"),
+            cantidad=item.get("cantidad", 1.0),
+            unidad_medida=item.get("unidad_medida", "UNID"),
+            precio_unitario=item.get("precio_unitario", 0.0),
+            descuento=item.get("descuento", 0.0),
+            tipo_iva=TipoIVAEnum(item.get("tipo_iva", "15")),
+            porcentaje_iva=item.get("porcentaje_iva", 15.0),
+            valor_iva=item.get("valor_iva", 0.0),
+            tiene_ice=item.get("tiene_ice", False),
+            precio_total_sin_impuestos=item.get("precio_total_sin_impuestos", 0.0),
+            precio_total_con_impuestos=item.get("precio_total_con_impuestos", 0.0)
+        )
+        db.add(detalle)
+    
+    db.commit()
+    db.refresh(proforma)
+    
+    return {"proforma": proforma, "mensaje": "Proforma creada exitosamente"}
+
+
+@router.get("/proformas/")
+async def listar_proformas(
+    estado: Optional[str] = None,
+    db: Session = Depends(get_db),
+    empresa: Empresa = Depends(get_current_empresa)
+):
+    """Listar proformas de la empresa"""
+    query = db.query(Proforma).filter(Proforma.empresa_id == empresa.id)
+    
+    if estado:
+        query = query.filter(Proforma.estado == estado)
+    
+    proformas = query.order_by(Proforma.fecha_emision.desc()).all()
+    
+    return {"proformas": proformas}
+
+
+@router.get("/proformas/{proforma_id}")
+async def obtener_proforma(
+    proforma_id: int,
+    db: Session = Depends(get_db),
+    empresa: Empresa = Depends(get_current_empresa)
+):
+    """Obtener detalles de una proforma"""
+    proforma = db.query(Proforma).filter(
+        and_(
+            Proforma.id == proforma_id,
+            Proforma.empresa_id == empresa.id
+        )
+    ).first()
+    
+    if not proforma:
+        raise HTTPException(status_code=404, detail="Proforma no encontrada")
+    
+    return {
+        "proforma": proforma,
+        "detalles": proforma.detalles,
+        "cliente": proforma.cliente
+    }
+
+
+@router.put("/proformas/{proforma_id}/convertir-factura")
+async def convertir_proforma_a_factura(
+    proforma_id: int,
+    db: Session = Depends(get_db),
+    empresa: Empresa = Depends(get_current_empresa),
+    current_user: User = Depends(get_current_user)
+):
+    """Convertir proforma en factura electrónica"""
+    proforma = db.query(Proforma).filter(
+        and_(
+            Proforma.id == proforma_id,
+            Proforma.empresa_id == empresa.id
+        )
+    ).first()
+    
+    if not proforma:
+        raise HTTPException(status_code=404, detail="Proforma no encontrada")
+    
+    if proforma.estado != "vigente":
+        raise HTTPException(status_code=400, detail="La proforma no está vigente")
+    
+    # Aquí se llamaría a la lógica de creación de factura
+    # Por ahora solo actualizamos el estado
+    proforma.estado = "convertida_factura"
+    db.commit()
+    
+    return {"mensaje": "Proforma convertida a factura exitosamente", "proforma": proforma}
+
+
+@router.delete("/proformas/{proforma_id}")
+async def eliminar_proforma(
+    proforma_id: int,
+    db: Session = Depends(get_db),
+    empresa: Empresa = Depends(get_current_empresa)
+):
+    """Eliminar una proforma"""
+    proforma = db.query(Proforma).filter(
+        and_(
+            Proforma.id == proforma_id,
+            Proforma.empresa_id == empresa.id
+        )
+    ).first()
+    
+    if not proforma:
+        raise HTTPException(status_code=404, detail="Proforma no encontrada")
+    
+    db.delete(proforma)
+    db.commit()
+    
+    return {"mensaje": "Proforma eliminada exitosamente"}

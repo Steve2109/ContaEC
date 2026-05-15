@@ -5,7 +5,7 @@ from sqlalchemy import Column, Integer, String, Float, DateTime, ForeignKey, Tex
 from sqlalchemy.orm import relationship
 from datetime import datetime
 
-from app.database.base import Base
+from app.core.database import Base
 
 class Warehouse(Base):
     __tablename__ = "warehouses"

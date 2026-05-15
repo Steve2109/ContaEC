@@ -8,6 +8,7 @@ from datetime import datetime
 import enum
 
 from app.core.database import Base
+from app.models.facturacion import TipoIVAEnum
 
 
 class TipoMovimientoEnum(str, enum.Enum):

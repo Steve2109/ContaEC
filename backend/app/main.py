@@ -13,7 +13,7 @@ import os
 from .core.config import settings
 from .core.database import engine, Base, get_db
 from .api import auth, admin, files
-from .routes import facturacion, inventario, pos, bi, budget, purchase, warehouse, crm, projects, integrations, ai
+from .routes import facturacion, inventario, pos, bi, budget, purchase, warehouse, crm, projects, integrations, ai, nomina
 from .services.auth_service import UserService, LicenseService
 from .models import User, License, LicenseType
 from .models.facturacion import EmpresaConfiguracion, CertificadoDigital, Cliente, ProductoServicio, ComprobanteElectronico
@@ -22,6 +22,7 @@ from .models.crm import Lead, Opportunity, FollowUp
 from .models.projects import Project, Task, TimeSheet
 from .models.integrations import BankStatement, EcommerceConnection, WebhookLog
 from .models.ai import SalesPrediction, FraudAlert, AutoCategory, ChatbotConversation
+from .models.nomina import Employee, PayrollPeriod, PayrollRecord, AttendanceRecord
 from datetime import datetime, timedelta
 
 
@@ -145,6 +146,7 @@ app.include_router(crm.router)
 app.include_router(projects.router)
 app.include_router(integrations.router)
 app.include_router(ai.router)
+app.include_router(nomina.router)
 
 
 # Rutas básicas
