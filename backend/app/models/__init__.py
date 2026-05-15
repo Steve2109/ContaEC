@@ -47,6 +47,12 @@ class User(Base):
     user_companies = relationship("UserCompany", back_populates="user", cascade="all, delete-orphan")
     license = relationship("License", back_populates="user", uselist=False, cascade="all, delete-orphan")
     configurations = relationship("UserConfiguration", back_populates="user", uselist=False, cascade="all, delete-orphan")
+    categorias_inventario = relationship("CategoriaProducto", back_populates="empresa", cascade="all, delete-orphan")
+    productos_inventario = relationship("Producto", back_populates="empresa", cascade="all, delete-orphan")
+    almacenes = relationship("Almacen", back_populates="empresa", cascade="all, delete-orphan")
+    clientes = relationship("Cliente", back_populates="empresa", cascade="all, delete-orphan")
+    productos_servicios = relationship("ProductoServicio", back_populates="empresa", cascade="all, delete-orphan")
+    comprobantes = relationship("ComprobanteElectronico", back_populates="empresa", cascade="all, delete-orphan")
 
 
 class Company(Base):
