@@ -23,6 +23,10 @@ from app.services.facturacion_service import GeneradorClaveAcceso, ConsultaSRI
 from app.utils.dependencies import get_current_user
 from app.core.security import encrypt_sensitive_data as encrypt_data
 from app.core.dependencies import get_current_empresa
+from app.core.sri_constants import (
+    IVA_CODES, DEFAULT_IVA, ICE_CODES, RETENTION_IR_CODES, RETENTION_IVA_CODES,
+    CONTRIBUTOR_TYPES, TAX_REGIMES, DOCUMENT_TYPES, DOCUMENT_STATUS, CONSUMIDOR_FINAL
+)
 
 router = APIRouter(prefix="/facturacion", tags=["Facturación Electrónica"])
 
@@ -537,62 +541,50 @@ async def consultar_ruc_sri(ruc: str):
 
 @router.get("/tipos-iva/")
 async def listar_tipos_iva():
-    """Listar todos los tipos de IVA disponibles"""
+    """Listar todos los tipos de IVA disponibles según SRI"""
     return {
         "tipos_iva": [
-            {"codigo": "0", "nombre": "0%", "valor": 0.0},
-            {"codigo": "5", "nombre": "5%", "valor": 5.0},
-            {"codigo": "8", "nombre": "8%", "valor": 8.0},
-            {"codigo": "12", "nombre": "12%", "valor": 12.0},
-            {"codigo": "13", "nombre": "13%", "valor": 13.0},
-            {"codigo": "14", "nombre": "14%", "valor": 14.0},
-            {"codigo": "15", "nombre": "15% (Por defecto)", "valor": 15.0},
-            {"codigo": "no_objeto", "nombre": "No objeto de impuesto", "valor": None},
-            {"codigo": "exento", "nombre": "Exento de IVA", "valor": 0.0},
-            {"codigo": "diferenciado", "nombre": "IVA diferenciado", "valor": None}
+            {"codigo": info["code"], "nombre": info["name"], "valor": info["value"] * 100 if info["value"] else None}
+            for key, info in IVA_CODES.items()
         ],
-        "default": "15"
+        "default": DEFAULT_IVA
     }
 
 
 @router.get("/tipos-retencion/")
 async def listar_tipos_retencion():
-    """Listar tipos de retención"""
+    """Listar tipos de retención (IR e IVA)"""
     return {
         "retencion_renta": [
-            {"codigo": "1", "porcentaje": p, "descripcion": f"{p}%"}
-            for p in [0, 10, 20, 30, 50, 70, 100]
+            {"codigo": info["code"], "porcentaje": info["value"] * 100, "descripcion": info["name"]}
+            for key, info in RETENTION_IR_CODES.items()
         ],
         "retencion_iva": [
-            {"codigo": "2", "porcentaje": p, "descripcion": f"{p}%"}
-            for p in [0, 10, 20, 30, 50, 70, 100]
+            {"codigo": info["code"], "porcentaje": info["value"] * 100, "descripcion": info["name"]}
+            for key, info in RETENTION_IVA_CODES.items()
         ]
     }
 
 
 @router.get("/tipos-contribuyente/")
 async def listar_tipos_contribuyente():
-    """Listar tipos de contribuyente"""
+    """Listar tipos de contribuyente según SRI"""
     return {
         "tipos": [
-            {"codigo": "01", "nombre": "No obligado a llevar contabilidad"},
-            {"codigo": "02", "nombre": "Obligado a llevar contabilidad"},
-            {"codigo": "03", "nombre": "RIMPE Emprendedor"},
-            {"codigo": "04", "nombre": "RIMPE Negocio Popular"},
-            {"codigo": "05", "nombre": "Contribuyente Especial"}
-        ]
+            {"codigo": codigo, "nombre": nombre}
+            for codigo, nombre in CONTRIBUTOR_TYPES.items()
+        ],
+        "consumidor_final": CONSUMIDOR_FINAL
     }
 
 
 @router.get("/regimenes-tributarios/")
 async def listar_regimenes():
-    """Listar regímenes tributarios"""
+    """Listar regímenes tributarios según SRI"""
     return {
         "regimenes": [
-            {"codigo": "general", "nombre": "Régimen General"},
-            {"codigo": "rimpe_emprendedor", "nombre": "RIMPE Emprendedor"},
-            {"codigo": "rimpe_negocio_popular", "nombre": "RIMPE Negocio Popular"},
-            {"codigo": "exento", "nombre": "Exento"}
+            {"codigo": codigo, "nombre": nombre}
+            for codigo, nombre in TAX_REGIMES.items()
         ]
     }
 

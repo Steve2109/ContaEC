@@ -11,30 +11,34 @@ ContaEC es un sistema contable completo con facturación electrónica para Ecuad
 
 ## Estructura del Proyecto
 
+### Backend (FastAPI - Python) - 48 archivos
 ```
 /workspace
 ├── backend/                    # Backend FastAPI (Python)
 │   ├── app/
 │   │   ├── main.py            # Punto de entrada principal
-│   │   ├── models/            # Modelos SQLAlchemy
+│   │   ├── models/            # Modelos SQLAlchemy (15 archivos)
 │   │   │   ├── __init__.py
 │   │   │   ├── user.py        # Modelo de usuario
 │   │   │   ├── company.py     # Modelo de empresa
 │   │   │   ├── license.py     # Modelo de licencia
 │   │   │   ├── facturacion.py # Facturación electrónica
 │   │   │   ├── inventario.py  # Inventario y productos
+│   │   │   ├── nomina.py      # Nómina y empleados
 │   │   │   ├── warehouse.py   # Almacenes multi-bodega
 │   │   │   ├── purchase.py    # Compras y proveedores
 │   │   │   ├── crm.py         # CRM y leads
 │   │   │   ├── projects.py    # Gestión de proyectos
 │   │   │   ├── budget.py      # Presupuestos
 │   │   │   ├── ai.py          # IA/ML predicciones
-│   │   │   └── integrations.py# Integraciones externas
-│   │   ├── routes/            # Endpoints API
+│   │   │   ├── integrations.py# Integraciones externas
+│   │   │   └── ...
+│   │   ├── routes/            # Endpoints API (13 archivos)
 │   │   │   ├── auth.py        # Autenticación
 │   │   │   ├── companies.py   # Empresas
 │   │   │   ├── facturacion.py # Facturación SRI
 │   │   │   ├── inventario.py  # Inventario
+│   │   │   ├── nomina.py      # Nómina
 │   │   │   ├── warehouse.py   # Almacenes
 │   │   │   ├── purchase.py    # Compras
 │   │   │   ├── pos.py         # Punto de venta
@@ -57,7 +61,8 @@ ContaEC es un sistema contable completo con facturación electrónica para Ecuad
 │   │   ├── utils/             # Utilidades
 │   │   └── core/              # Configuración core
 │   │       ├── security.py    # Encriptación, JWT
-│   │       └── config.py      # Configuración
+│   │       ├── config.py      # Configuración
+│   │       └── sri_constants.py # Constantes SRI (IVA, ICE, Retenciones)
 │   ├── static/
 │   │   └── uploads/           # Archivos subidos
 │   │       ├── temp/          # Temporales (auto-limpieza)
@@ -66,27 +71,30 @@ ContaEC es un sistema contable completo con facturación electrónica para Ecuad
 │   ├── logs/                  # Logs del sistema
 │   ├── .env.example           # Ejemplo de configuración
 │   └── requirements.txt       # Dependencias Python
-│
+```
+
+### Frontend (React + TypeScript + Vite) - 16 archivos
+```
 ├── frontend/                   # Frontend React + TypeScript
 │   ├── src/
-│   │   ├── App.tsx            # Componente principal
+│   │   ├── App.tsx            # Componente principal con routing
 │   │   ├── main.tsx           # Entry point
 │   │   ├── index.css          # Estilos globales + Tailwind
 │   │   ├── components/        # Componentes reutilizables
-│   │   │   ├── Sidebar.tsx    # Menú lateral
-│   │   │   ├── Header.tsx     # Cabecera
+│   │   │   ├── Sidebar.tsx    # Menú lateral con navegación
+│   │   │   ├── Header.tsx     # Cabecera con usuario, idioma, dark mode
 │   │   │   └── ...
-│   │   ├── pages/             # Páginas de la aplicación
+│   │   ├── pages/             # Páginas de la aplicación (8 archivos)
 │   │   │   ├── Login.tsx      # Login
-│   │   │   ├── Dashboard.tsx  # Dashboard principal
-│   │   │   ├── Companies.tsx  # Empresas
-│   │   │   ├── Invoices.tsx   # Facturación
-│   │   │   ├── Products.tsx   # Productos
+│   │   │   ├── Dashboard.tsx  # Dashboard principal con gráficos
+│   │   │   ├── Companies.tsx  # Gestión de empresas
+│   │   │   ├── Invoices.tsx   # Facturación electrónica
+│   │   │   ├── Products.tsx   # Productos e inventario
 │   │   │   ├── Employees.tsx  # Empleados/Nómina
-│   │   │   ├── AdminPanel.tsx # Panel Admin
-│   │   │   └── Settings.tsx   # Configuración
+│   │   │   ├── AdminPanel.tsx # Panel de Administrador
+│   │   │   └── Settings.tsx   # Configuración general
 │   │   ├── services/          # Servicios API
-│   │   │   └── api.ts         # Cliente Axios
+│   │   │   └── api.ts         # Cliente Axios con interceptores
 │   │   ├── store/             # Estado global (Zustand)
 │   │   │   └── useStore.ts
 │   │   ├── hooks/             # Custom hooks
@@ -101,8 +109,11 @@ ContaEC es un sistema contable completo con facturación electrónica para Ecuad
 │   ├── vite.config.ts
 │   ├── tailwind.config.js
 │   └── postcss.config.js
-│
-├── FICHA_TECNICA.pdf          # Documentación SRI
+```
+
+### Documentación
+```
+├── FICHA_TECNICA.pdf          # Documentación oficial SRI
 └── README.md                  # Este archivo
 ```
 
