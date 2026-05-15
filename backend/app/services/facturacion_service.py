@@ -22,7 +22,7 @@ from app.models.facturacion import (
     TipoComprobanteEnum, EstadoComprobanteEnum, TipoIVAEnum,
     TipoContribuyenteEnum, RegimenTributarioEnum
 )
-from app.core.security import decrypt_data
+from app.core.security import decrypt_sensitive_data as decrypt_data
 
 
 class GeneradorClaveAcceso:

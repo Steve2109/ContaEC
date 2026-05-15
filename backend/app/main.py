@@ -4,7 +4,7 @@ Aplicación principal FastAPI para ContaEC
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-from slowapi import SlowAPI, _rate_limit_exceeded_handler
+from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.util import get_remote_address
 from contextlib import asynccontextmanager
 import logging
@@ -13,10 +13,11 @@ import os
 from .core.config import settings
 from .core.database import engine, Base, get_db
 from .api import auth, admin, files
-from .routes import facturacion
+from .routes import facturacion, inventario
 from .services.auth_service import UserService, LicenseService
 from .models import User, License, LicenseType
 from .models.facturacion import EmpresaConfiguracion, CertificadoDigital, Cliente, ProductoServicio, ComprobanteElectronico
+from .models.inventario import Producto, CategoriaProducto, Almacen, StockProducto, MovimientoInventario
 from datetime import datetime, timedelta
 
 
@@ -93,7 +94,7 @@ app = FastAPI(
 )
 
 # Configurar rate limiting
-limiter = SlowAPI(key_func=get_remote_address)
+limiter = Limiter(key_func=get_remote_address)
 app.state.limiter = limiter
 app.add_exception_handler(429, _rate_limit_exceeded_handler)
 
@@ -130,6 +131,7 @@ app.include_router(auth.router)
 app.include_router(admin.router)
 app.include_router(files.router)
 app.include_router(facturacion.router)
+app.include_router(inventario.router)
 
 
 # Rutas básicas
