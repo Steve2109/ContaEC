@@ -9,6 +9,103 @@ ContaEC es un sistema contable completo con facturación electrónica para Ecuad
 - **Correo de soporte**: info@tymtechnology.shop
 - **DNS**: conta.tymtechnology.shop
 
+## Estructura del Proyecto
+
+```
+/workspace
+├── backend/                    # Backend FastAPI (Python)
+│   ├── app/
+│   │   ├── main.py            # Punto de entrada principal
+│   │   ├── models/            # Modelos SQLAlchemy
+│   │   │   ├── __init__.py
+│   │   │   ├── user.py        # Modelo de usuario
+│   │   │   ├── company.py     # Modelo de empresa
+│   │   │   ├── license.py     # Modelo de licencia
+│   │   │   ├── facturacion.py # Facturación electrónica
+│   │   │   ├── inventario.py  # Inventario y productos
+│   │   │   ├── warehouse.py   # Almacenes multi-bodega
+│   │   │   ├── purchase.py    # Compras y proveedores
+│   │   │   ├── crm.py         # CRM y leads
+│   │   │   ├── projects.py    # Gestión de proyectos
+│   │   │   ├── budget.py      # Presupuestos
+│   │   │   ├── ai.py          # IA/ML predicciones
+│   │   │   └── integrations.py# Integraciones externas
+│   │   ├── routes/            # Endpoints API
+│   │   │   ├── auth.py        # Autenticación
+│   │   │   ├── companies.py   # Empresas
+│   │   │   ├── facturacion.py # Facturación SRI
+│   │   │   ├── inventario.py  # Inventario
+│   │   │   ├── warehouse.py   # Almacenes
+│   │   │   ├── purchase.py    # Compras
+│   │   │   ├── pos.py         # Punto de venta
+│   │   │   ├── bi.py          # Business Intelligence
+│   │   │   ├── budget.py      # Presupuestos
+│   │   │   ├── crm.py         # CRM
+│   │   │   ├── projects.py    # Proyectos
+│   │   │   ├── integrations.py# Integraciones
+│   │   │   └── files.py       # Archivos y escaneo
+│   │   ├── api/               # API adicional
+│   │   │   ├── admin.py       # Panel administrador
+│   │   │   └── auth.py        # Auth endpoints
+│   │   ├── schemas/           # Pydantic schemas
+│   │   ├── services/          # Lógica de negocio
+│   │   │   ├── sri_service.py # Servicio SRI
+│   │   │   ├── clamav_service.py # ClamAV
+│   │   │   ├── virustotal_service.py # VirusTotal
+│   │   │   ├── email_service.py # SMTP
+│   │   │   └── backup_service.py # Backups
+│   │   ├── utils/             # Utilidades
+│   │   └── core/              # Configuración core
+│   │       ├── security.py    # Encriptación, JWT
+│   │       └── config.py      # Configuración
+│   ├── static/
+│   │   └── uploads/           # Archivos subidos
+│   │       ├── temp/          # Temporales (auto-limpieza)
+│   │       └── permanent/     # Permanentes
+│   ├── backups/               # Backups automáticos
+│   ├── logs/                  # Logs del sistema
+│   ├── .env.example           # Ejemplo de configuración
+│   └── requirements.txt       # Dependencias Python
+│
+├── frontend/                   # Frontend React + TypeScript
+│   ├── src/
+│   │   ├── App.tsx            # Componente principal
+│   │   ├── main.tsx           # Entry point
+│   │   ├── index.css          # Estilos globales + Tailwind
+│   │   ├── components/        # Componentes reutilizables
+│   │   │   ├── Sidebar.tsx    # Menú lateral
+│   │   │   ├── Header.tsx     # Cabecera
+│   │   │   └── ...
+│   │   ├── pages/             # Páginas de la aplicación
+│   │   │   ├── Login.tsx      # Login
+│   │   │   ├── Dashboard.tsx  # Dashboard principal
+│   │   │   ├── Companies.tsx  # Empresas
+│   │   │   ├── Invoices.tsx   # Facturación
+│   │   │   ├── Products.tsx   # Productos
+│   │   │   ├── Employees.tsx  # Empleados/Nómina
+│   │   │   ├── AdminPanel.tsx # Panel Admin
+│   │   │   └── Settings.tsx   # Configuración
+│   │   ├── services/          # Servicios API
+│   │   │   └── api.ts         # Cliente Axios
+│   │   ├── store/             # Estado global (Zustand)
+│   │   │   └── useStore.ts
+│   │   ├── hooks/             # Custom hooks
+│   │   ├── utils/             # Utilidades
+│   │   └── types/             # Tipos TypeScript
+│   │       └── index.ts
+│   ├── public/
+│   │   └── favicon.svg
+│   ├── index.html
+│   ├── package.json
+│   ├── tsconfig.json
+│   ├── vite.config.ts
+│   ├── tailwind.config.js
+│   └── postcss.config.js
+│
+├── FICHA_TECNICA.pdf          # Documentación SRI
+└── README.md                  # Este archivo
+```
+
 ## Tecnologías Utilizadas
 - **Backend**: FastAPI (Python)
 - **Frontend**: React/Next.js (Fase 6)
