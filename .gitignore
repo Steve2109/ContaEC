@@ -1,49 +1,28 @@
 ```
-# Python
 __pycache__/
 *.pyc
 *.pyo
 *.pyd
-.Python
-env/
 venv/
 .venv/
-.ENV
-.venv.bak/
-pip-log.txt
-pip-delete-this-directory.txt
-
-# Build and distribution artifacts
-build/
-dist/
-*.egg
-*.egg-info/
-*.so
-*.whl
-
-# Testing
-.coverage
-coverage/
-htmlcov/
-.pytest_cache/
-.tox/
-
-# Environment variables
 .env
 .env.local
-*.env.*
-
-# IDE and editor files
+.env.*
 .vscode/
 .idea/
+*.log
+*.tmp
+dist/
+build/
+target/
+node_modules/
+.mypy_cache/
+.pytest_cache/
+coverage/
+htmlcov/
+.coverage
 *.swp
 *.swo
-*.tmp
-
-# OS generated files
 .DS_Store
 Thumbs.db
-
-# Logs
-*.log
 ```

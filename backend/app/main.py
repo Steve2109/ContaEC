@@ -13,7 +13,7 @@ import os
 from .core.config import settings
 from .core.database import engine, Base, get_db
 from .api import auth, admin, files
-from .routes import facturacion, inventario
+from .routes import facturacion, inventario, pos, bi, budget, purchase, warehouse
 from .services.auth_service import UserService, LicenseService
 from .models import User, License, LicenseType
 from .models.facturacion import EmpresaConfiguracion, CertificadoDigital, Cliente, ProductoServicio, ComprobanteElectronico
@@ -132,6 +132,11 @@ app.include_router(admin.router)
 app.include_router(files.router)
 app.include_router(facturacion.router)
 app.include_router(inventario.router)
+app.include_router(pos.router)
+app.include_router(bi.router)
+app.include_router(budget.router)
+app.include_router(purchase.router)
+app.include_router(warehouse.router)
 
 
 # Rutas básicas
