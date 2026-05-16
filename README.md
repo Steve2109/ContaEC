@@ -41,12 +41,16 @@ El script automatiza todo: dependencias del sistema, PostgreSQL, ClamAV, Node.js
 
 ---
 # Instalar dependencias nuevas del frontend
+```bash
 cd frontend
 npm install react-i18next i18next i18next-browser-languagedetector
 npm install lucide-react recharts
+```
 
 # Build
+```bash
 npm run build
+```
 
 ---
 
