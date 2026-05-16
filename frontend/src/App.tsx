@@ -26,13 +26,14 @@ const ProtectedRoute: React.FC<{ children: React.ReactNode }> = ({ children }) =
 };
 
 const App: React.FC = () => {
-  const { user, setUser, setCompanies, setCurrentCompany, setLicense, isDarkMode } = useStore();
+  const { setUser, setToken, setCompanies, setCurrentCompany, setLicense, isDarkMode } = useStore();
 
   useEffect(() => {
     const initApp = async () => {
       const token = localStorage.getItem('token');
       if (token) {
         try {
+          setToken(token);
           const userData = await authService.me();
           setUser(userData);
           const companies = await companyService.getAll();
@@ -49,7 +50,7 @@ const App: React.FC = () => {
       }
     };
     initApp();
-  }, [setUser, setCompanies, setCurrentCompany, setLicense]);
+  }, [setUser, setToken, setCompanies, setCurrentCompany, setLicense]);
 
   useEffect(() => {
     if (isDarkMode) {

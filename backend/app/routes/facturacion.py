@@ -2,13 +2,14 @@
 Rutas API para Facturación Electrónica - SRI Ecuador
 ContaEC - Fase 3
 """
-from fastapi import APIRouter, Depends, HTTPException, status, BackgroundTasks, UploadFile, File
+from fastapi import APIRouter, Depends, HTTPException, status, BackgroundTasks, UploadFile, File, Form
 from sqlalchemy.orm import Session
 from sqlalchemy import and_
 from typing import List, Optional, Dict, Any
 from datetime import datetime, timedelta
 from pydantic import BaseModel, Field
 import os
+import base64
 
 from app.core.database import get_db
 from app.models import User, Company as Empresa
@@ -19,7 +20,10 @@ from app.models.facturacion import (
     TipoComprobanteEnum, EstadoComprobanteEnum, TipoIVAEnum,
     TipoContribuyenteEnum, RegimenTributarioEnum
 )
-from app.services.facturacion_service import GeneradorClaveAcceso, ConsultaSRI
+from app.services.facturacion_service import (
+    GeneradorClaveAcceso, ConsultaSRI, GeneradorXML, FirmadorXML, ServicioSRI,
+    sri_codigo_iva
+)
 from app.utils.dependencies import get_current_user
 from app.core.security import encrypt_sensitive_data as encrypt_data
 from app.core.dependencies import get_current_empresa
@@ -86,6 +90,7 @@ class DetalleComprobanteCreate(BaseModel):
     porcentaje_iva: float = 15.0
     tiene_ice: bool = False
     porcentaje_ice: float = 0.0
+    tipo_ice: Optional[str] = None
 
 
 class FacturaCreate(BaseModel):
@@ -94,6 +99,17 @@ class FacturaCreate(BaseModel):
     nombre_cliente: Optional[str] = None
     detalles: List[DetalleComprobanteCreate]
     observaciones: Optional[str] = None
+    secuencial_personalizado: Optional[str] = None
+
+
+class ComprobanteElectronicoCreate(BaseModel):
+    tipo_comprobante: TipoComprobanteEnum
+    cliente_id: Optional[int] = None
+    detalles: List[DetalleComprobanteCreate] = []
+    retenciones: List[Dict[str, Any]] = []
+    comprobante_referencia: Optional[str] = None
+    tipo_emision_referencia: Optional[str] = None
+    motivo_modificacion: Optional[str] = None
     secuencial_personalizado: Optional[str] = None
 
 
@@ -118,11 +134,199 @@ class ConfiguracionSRIUpdate(BaseModel):
     ruc: str
     razon_social: str
     nombre_comercial: Optional[str] = None
+    direccion_matriz: str = "SIN DIRECCION"
+    direccion_establecimiento: str = "SIN DIRECCION"
+    contribuyente_especial: Optional[str] = None
+    agente_retencion: Optional[str] = None
     tipo_contribuyente: TipoContribuyenteEnum = TipoContribuyenteEnum.OBLIGADO_CONTABILIDAD
     regimen_tributario: RegimenTributarioEnum = RegimenTributarioEnum.GENERAL
     establecimiento: str = "001"
     punto_emision: str = "001"
     ambiente: str = "pruebas"
+
+
+class GuiaRemisionCreate(BaseModel):
+    destinatario_ruc: str
+    destinatario_razon_social: str
+    destinatario_direccion: str
+    motivo_traslado: str = "Venta"
+    placa_vehiculo: str = "AAA0000"
+    fecha_inicio_transporte: datetime
+    fecha_fin_transporte: Optional[datetime] = None
+    secuencial_personalizado: Optional[str] = None
+    detalles: List[DetalleComprobanteCreate] = []
+
+
+SECUENCIA_POR_TIPO = {
+    TipoComprobanteEnum.FACTURA: "secuencia_factura",
+    TipoComprobanteEnum.NOTA_CREDITO: "secuencia_nota_credito",
+    TipoComprobanteEnum.NOTA_DEBITO: "secuencia_nota_debito",
+    TipoComprobanteEnum.RETENCION: "secuencia_retencion",
+    TipoComprobanteEnum.GUIA_REMISION: "secuencia_guia_remision",
+}
+
+
+def _configuracion_sri_activa(db: Session, empresa_id: int) -> EmpresaConfiguracion:
+    config = db.query(EmpresaConfiguracion).filter(EmpresaConfiguracion.empresa_id == empresa_id).first()
+    if not config:
+        raise HTTPException(status_code=400, detail="Debe configurar primero la facturación electrónica")
+    return config
+
+
+def _certificado_activo(db: Session, config_id: int) -> CertificadoDigital:
+    certificado = db.query(CertificadoDigital).filter(
+        and_(CertificadoDigital.empresa_config_id == config_id, CertificadoDigital.activo == True)
+    ).first()
+    if not certificado:
+        raise HTTPException(status_code=400, detail="No hay certificado digital activo")
+    return certificado
+
+
+def _obtener_cliente(db: Session, empresa_id: int, cliente_id: Optional[int]) -> Cliente:
+    if cliente_id:
+        cliente = db.query(Cliente).filter(and_(Cliente.id == cliente_id, Cliente.empresa_id == empresa_id)).first()
+        if not cliente:
+            raise HTTPException(status_code=404, detail="Cliente no encontrado")
+        return cliente
+    consumidor = db.query(Cliente).filter(
+        and_(Cliente.empresa_id == empresa_id, Cliente.es_consumidor_final == True)
+    ).first()
+    if consumidor:
+        return consumidor
+    consumidor = Cliente(
+        empresa_id=empresa_id,
+        tipo_identificacion="cedula",
+        identificacion="9999999999999",
+        razon_social="CONSUMIDOR FINAL",
+        es_consumidor_final=True,
+    )
+    db.add(consumidor)
+    db.flush()
+    return consumidor
+
+
+def _siguiente_secuencial(config: EmpresaConfiguracion, tipo: TipoComprobanteEnum, personalizado: Optional[str]) -> str:
+    if personalizado:
+        return personalizado.zfill(9)
+    attr = SECUENCIA_POR_TIPO[tipo]
+    return str(getattr(config, attr)).zfill(9)
+
+
+def _incrementar_secuencia(config: EmpresaConfiguracion, tipo: TipoComprobanteEnum, personalizado: Optional[str]) -> None:
+    if personalizado:
+        return
+    attr = SECUENCIA_POR_TIPO[tipo]
+    setattr(config, attr, getattr(config, attr) + 1)
+
+
+def _agregar_detalles_e_impuestos(db: Session, comprobante: ComprobanteElectronico, detalles_data: List[DetalleComprobanteCreate]) -> None:
+    impuestos_agrupados: Dict[tuple[str, str, float], Dict[str, float]] = {}
+    total_sin_impuestos = 0.0
+    total_iva = 0.0
+    total_ice = 0.0
+    total_descuentos = 0.0
+
+    for detalle_data in detalles_data:
+        subtotal = max((detalle_data.cantidad * detalle_data.precio_unitario) - detalle_data.descuento, 0)
+        valor_iva = round(subtotal * (detalle_data.porcentaje_iva / 100), 2)
+        valor_ice = round(subtotal * (detalle_data.porcentaje_ice / 100), 2) if detalle_data.tiene_ice else 0.0
+        codigo_iva = sri_codigo_iva(detalle_data.tipo_iva, detalle_data.porcentaje_iva)
+
+        detalle = ComprobanteDetalle(
+            comprobante_id=comprobante.id,
+            producto_id=detalle_data.producto_id,
+            codigo_principal=detalle_data.codigo_principal,
+            descripcion=detalle_data.descripcion,
+            cantidad=detalle_data.cantidad,
+            unidad_medida=detalle_data.unidad_medida,
+            precio_unitario=detalle_data.precio_unitario,
+            descuento=detalle_data.descuento,
+            tipo_iva=detalle_data.tipo_iva,
+            porcentaje_iva=detalle_data.porcentaje_iva,
+            valor_iva=valor_iva,
+            tiene_ice=detalle_data.tiene_ice,
+            tipo_ice=detalle_data.tipo_ice,
+            porcentaje_ice=detalle_data.porcentaje_ice,
+            valor_ice=valor_ice,
+            precio_total_sin_impuestos=subtotal,
+            precio_total_con_impuestos=subtotal + valor_iva + valor_ice,
+        )
+        db.add(detalle)
+
+        key = ("2", codigo_iva, detalle_data.porcentaje_iva)
+        impuestos_agrupados.setdefault(key, {"base": 0.0, "valor": 0.0})
+        impuestos_agrupados[key]["base"] += subtotal
+        impuestos_agrupados[key]["valor"] += valor_iva
+        if valor_ice:
+            ice_key = ("3", detalle_data.tipo_ice or "0", detalle_data.porcentaje_ice)
+            impuestos_agrupados.setdefault(ice_key, {"base": 0.0, "valor": 0.0})
+            impuestos_agrupados[ice_key]["base"] += subtotal
+            impuestos_agrupados[ice_key]["valor"] += valor_ice
+
+        total_sin_impuestos += subtotal
+        total_iva += valor_iva
+        total_ice += valor_ice
+        total_descuentos += detalle_data.descuento
+
+    for (codigo, codigo_porcentaje, tarifa), values in impuestos_agrupados.items():
+        db.add(ComprobanteImpuesto(
+            comprobante_id=comprobante.id,
+            codigo=codigo,
+            codigo_porcentaje=str(codigo_porcentaje),
+            base_imponible=round(values["base"], 2),
+            tarifa=tarifa,
+            valor=round(values["valor"], 2),
+        ))
+
+    comprobante.subtotal_sin_impuestos = round(total_sin_impuestos, 2)
+    comprobante.total_iva = round(total_iva, 2)
+    comprobante.total_ice = round(total_ice, 2)
+    comprobante.total_descuentos = round(total_descuentos, 2)
+    comprobante.importe_total = round(total_sin_impuestos + total_iva + total_ice, 2)
+
+
+def _crear_comprobante_base(
+    db: Session,
+    empresa: Empresa,
+    usuario: User,
+    config: EmpresaConfiguracion,
+    cliente: Cliente,
+    tipo: TipoComprobanteEnum,
+    secuencial: str,
+    referencia: Optional[str] = None,
+    tipo_referencia: Optional[str] = None,
+    motivo: Optional[str] = None,
+) -> ComprobanteElectronico:
+    fecha = datetime.utcnow()
+    ambiente_codigo = "2" if config.ambiente == "produccion" else "1"
+    clave_acceso = GeneradorClaveAcceso.generar(
+        fecha_emision=fecha,
+        tipo_comprobante=tipo.value,
+        ruc=config.ruc,
+        ambiente=ambiente_codigo,
+        establecimiento=config.establecimiento,
+        punto_emision=config.punto_emision,
+        secuencial=secuencial,
+        tipo_emision=config.tipo_emision or "1",
+    )
+    comprobante = ComprobanteElectronico(
+        empresa_id=empresa.id,
+        cliente_id=cliente.id,
+        tipo_comprobante=tipo,
+        establecimiento=config.establecimiento,
+        punto_emision=config.punto_emision,
+        secuencial=secuencial,
+        clave_acceso=clave_acceso,
+        fecha_emision=fecha,
+        estado=EstadoComprobanteEnum.BORRADOR,
+        comprobante_referencia=referencia,
+        tipo_emision_referencia=tipo_referencia,
+        motivo_modificacion=motivo,
+        creado_por=usuario.id,
+    )
+    db.add(comprobante)
+    db.flush()
+    return comprobante
 
 
 # ==================== CLIENTES ====================
@@ -305,8 +509,8 @@ async def cargar_certificado(
         raise HTTPException(status_code=400, detail="Primero configure los datos de la empresa")
     
     contenido_certificado = await certificado_file.read()
-    certificado_encriptado = encrypt_data(contenido_certificado, clave_encriptacion)
-    clave_encriptada = encrypt_data(clave.encode('utf-8'), clave_encriptacion)
+    certificado_encriptado = encrypt_data(base64.b64encode(contenido_certificado).decode("ascii"))
+    clave_encriptada = encrypt_data(clave)
     
     certificado_existente = db.query(CertificadoDigital).filter(
         and_(CertificadoDigital.empresa_config_id == config.id, CertificadoDigital.activo == True)
@@ -322,11 +526,28 @@ async def cargar_certificado(
         activo=True,
         verificado=False
     )
+    try:
+        info_cert = FirmadorXML.extraer_info_certificado(certificado_encriptado, clave_encriptada)
+        nuevo_certificado.sujeto = info_cert["sujeto"]
+        nuevo_certificado.emisor = info_cert["emisor"]
+        nuevo_certificado.numero_serial = info_cert["numero_serial"]
+        nuevo_certificado.fecha_inicio = info_cert["fecha_inicio"]
+        nuevo_certificado.fecha_fin = info_cert["fecha_fin"]
+        nuevo_certificado.dias_restantes = info_cert["dias_restantes"]
+        nuevo_certificado.verificado = True
+    except Exception:
+        nuevo_certificado.verificado = False
     
     db.add(nuevo_certificado)
     db.commit()
     
-    return {"mensaje": "Certificado cargado exitosamente", "certificado_id": nuevo_certificado.id}
+    return {
+        "mensaje": "Certificado cargado exitosamente",
+        "certificado_id": nuevo_certificado.id,
+        "fecha_fin": nuevo_certificado.fecha_fin,
+        "dias_restantes": nuevo_certificado.dias_restantes,
+        "verificado": nuevo_certificado.verificado,
+    }
 
 
 @router.get("/configuracion-sri/validar-certificado/")
@@ -376,103 +597,17 @@ async def crear_factura(
     empresa: Empresa = Depends(get_current_empresa)
 ):
     """Crear una nueva factura electrónica"""
-    config = db.query(EmpresaConfiguracion).filter(
-        EmpresaConfiguracion.empresa_id == empresa.id
-    ).first()
-    
-    if not config:
-        raise HTTPException(status_code=400, detail="Debe configurar primero la facturación electrónica")
-    
-    certificado = db.query(CertificadoDigital).filter(
-        and_(CertificadoDigital.empresa_config_id == config.id, CertificadoDigital.activo == True)
-    ).first()
-    
-    if not certificado:
-        raise HTTPException(status_code=400, detail="No hay certificado digital activo")
-    
-    # Obtener o crear cliente
-    if factura_data.cliente_id:
-        cliente = db.query(Cliente).filter(
-            and_(Cliente.id == factura_data.cliente_id, Cliente.empresa_id == empresa.id)
-        ).first()
-        if not cliente:
-            raise HTTPException(status_code=404, detail="Cliente no encontrado")
-    else:
-        cliente = db.query(Cliente).filter(
-            and_(Cliente.empresa_id == empresa.id, Cliente.es_consumidor_final == True)
-        ).first()
-        
-        if not cliente:
-            cliente = Cliente(
-                empresa_id=empresa.id,
-                tipo_identificacion="cedula",
-                identificacion="9999999999999",
-                razon_social="CONSUMIDOR FINAL",
-                es_consumidor_final=True
-            )
-            db.add(cliente)
-            db.commit()
-            db.refresh(cliente)
-    
-    secuencial = factura_data.secuencial_personalizado or str(config.secuencia_factura).zfill(9)
-    ambiente_codigo = "1" if config.ambiente == "pruebas" else "2"
-    
-    clave_acceso = GeneradorClaveAcceso.generar(
-        fecha_emision=datetime.utcnow(),
-        tipo_comprobante=TipoComprobanteEnum.FACTURA.value,
-        ruc=config.ruc,
-        ambiente=ambiente_codigo,
-        secuencial=secuencial
+    config = _configuracion_sri_activa(db, empresa.id)
+    cliente = _obtener_cliente(db, empresa.id, factura_data.cliente_id)
+    secuencial = _siguiente_secuencial(config, TipoComprobanteEnum.FACTURA, factura_data.secuencial_personalizado)
+    comprobante = _crear_comprobante_base(
+        db, empresa, usuario, config, cliente, TipoComprobanteEnum.FACTURA, secuencial
     )
-    
-    comprobante = ComprobanteElectronico(
-        empresa_id=empresa.id,
-        cliente_id=cliente.id,
-        tipo_comprobante=TipoComprobanteEnum.FACTURA,
-        establecimiento=config.establecimiento,
-        punto_emision=config.punto_emision,
-        secuencial=secuencial,
-        clave_acceso=clave_acceso,
-        fecha_emision=datetime.utcnow(),
-        estado=EstadoComprobanteEnum.BORRADOR,
-        creado_por=usuario.id
-    )
-    
-    db.add(comprobante)
+    _agregar_detalles_e_impuestos(db, comprobante, factura_data.detalles)
+    _incrementar_secuencia(config, TipoComprobanteEnum.FACTURA, factura_data.secuencial_personalizado)
     db.flush()
-    
-    # Calcular totales
-    total_sin_impuestos = 0.0
-    total_iva = 0.0
-    
-    for detalle_data in factura_data.detalles:
-        subtotal_linea = detalle_data.cantidad * detalle_data.precio_unitario - detalle_data.descuento
-        valor_iva = subtotal_linea * (detalle_data.porcentaje_iva / 100)
-        
-        detalle = ComprobanteDetalle(
-            comprobante_id=comprobante.id,
-            producto_id=detalle_data.producto_id,
-            codigo_principal=detalle_data.codigo_principal,
-            descripcion=detalle_data.descripcion,
-            cantidad=detalle_data.cantidad,
-            precio_unitario=detalle_data.precio_unitario,
-            descuento=detalle_data.descuento,
-            tipo_iva=detalle_data.tipo_iva,
-            porcentaje_iva=detalle_data.porcentaje_iva,
-            valor_iva=valor_iva,
-            precio_total_sin_impuestos=subtotal_linea,
-            precio_total_con_impuestos=subtotal_linea + valor_iva
-        )
-        db.add(detalle)
-        
-        total_sin_impuestos += subtotal_linea
-        total_iva += valor_iva
-    
-    comprobante.subtotal_sin_impuestos = total_sin_impuestos
-    comprobante.total_iva = total_iva
-    comprobante.importe_total = total_sin_impuestos + total_iva
-    
-    config.secuencia_factura += 1
+    db.refresh(comprobante)
+    comprobante.xml_generado = GeneradorXML.generar(comprobante, config)
     db.commit()
     db.refresh(comprobante)
     
@@ -526,6 +661,249 @@ async def obtener_factura(
     }
 
 
+# ==================== CICLO ELECTRÓNICO SRI ====================
+
+@router.post("/comprobantes/", response_model=ComprobanteResponse, status_code=status.HTTP_201_CREATED)
+async def crear_comprobante_electronico(
+    data: ComprobanteElectronicoCreate,
+    db: Session = Depends(get_db),
+    usuario: User = Depends(get_current_user),
+    empresa: Empresa = Depends(get_current_empresa)
+):
+    """Crear factura, nota de crédito, nota de débito o retención con XML generado."""
+    if data.tipo_comprobante == TipoComprobanteEnum.PROFORMA:
+        raise HTTPException(status_code=400, detail="Use /facturacion/proformas/ para proformas")
+    if data.tipo_comprobante == TipoComprobanteEnum.GUIA_REMISION:
+        raise HTTPException(status_code=400, detail="Use /facturacion/guias-remision/ para guías")
+    if data.tipo_comprobante in {TipoComprobanteEnum.FACTURA, TipoComprobanteEnum.NOTA_CREDITO, TipoComprobanteEnum.NOTA_DEBITO} and not data.detalles:
+        raise HTTPException(status_code=400, detail="El comprobante requiere al menos un detalle")
+    if data.tipo_comprobante == TipoComprobanteEnum.RETENCION and not data.retenciones:
+        raise HTTPException(status_code=400, detail="La retención requiere al menos un impuesto retenido")
+
+    config = _configuracion_sri_activa(db, empresa.id)
+    cliente = _obtener_cliente(db, empresa.id, data.cliente_id)
+    secuencial = _siguiente_secuencial(config, data.tipo_comprobante, data.secuencial_personalizado)
+    comprobante = _crear_comprobante_base(
+        db, empresa, usuario, config, cliente, data.tipo_comprobante, secuencial,
+        referencia=data.comprobante_referencia,
+        tipo_referencia=data.tipo_emision_referencia,
+        motivo=data.motivo_modificacion,
+    )
+
+    if data.detalles:
+        _agregar_detalles_e_impuestos(db, comprobante, data.detalles)
+
+    for item in data.retenciones:
+        base = float(item.get("base_imponible", 0))
+        porcentaje = float(item.get("porcentaje_retener", 0))
+        valor = round(base * (porcentaje / 100), 2)
+        db.add(ComprobanteRetencion(
+            comprobante_id=comprobante.id,
+            codigo=str(item.get("codigo", "1")),
+            codigo_retencion=str(item.get("codigo_retencion", "0")),
+            base_imponible=base,
+            porcentaje_retener=porcentaje,
+            valor_retenido=valor,
+        ))
+        comprobante.importe_total += valor
+
+    _incrementar_secuencia(config, data.tipo_comprobante, data.secuencial_personalizado)
+    db.flush()
+    db.refresh(comprobante)
+    comprobante.xml_generado = GeneradorXML.generar(comprobante, config)
+    db.commit()
+    db.refresh(comprobante)
+    return comprobante
+
+
+@router.post("/comprobantes/{comprobante_id}/generar-xml")
+async def generar_xml_comprobante(
+    comprobante_id: int,
+    db: Session = Depends(get_db),
+    empresa: Empresa = Depends(get_current_empresa)
+):
+    """Regenera y guarda el XML SRI del comprobante."""
+    config = _configuracion_sri_activa(db, empresa.id)
+    comprobante = db.query(ComprobanteElectronico).filter(
+        and_(ComprobanteElectronico.id == comprobante_id, ComprobanteElectronico.empresa_id == empresa.id)
+    ).first()
+    if not comprobante:
+        raise HTTPException(status_code=404, detail="Comprobante no encontrado")
+    comprobante.xml_generado = GeneradorXML.generar(comprobante, config)
+    db.commit()
+    return {"xml": comprobante.xml_generado, "clave_acceso": comprobante.clave_acceso}
+
+
+@router.post("/comprobantes/{comprobante_id}/firmar")
+async def firmar_comprobante(
+    comprobante_id: int,
+    db: Session = Depends(get_db),
+    empresa: Empresa = Depends(get_current_empresa)
+):
+    """Firma el XML del comprobante con el certificado digital activo."""
+    config = _configuracion_sri_activa(db, empresa.id)
+    certificado = _certificado_activo(db, config.id)
+    comprobante = db.query(ComprobanteElectronico).filter(
+        and_(ComprobanteElectronico.id == comprobante_id, ComprobanteElectronico.empresa_id == empresa.id)
+    ).first()
+    if not comprobante:
+        raise HTTPException(status_code=404, detail="Comprobante no encontrado")
+    if not comprobante.xml_generado:
+        comprobante.xml_generado = GeneradorXML.generar(comprobante, config)
+    try:
+        comprobante.xml_firmado = FirmadorXML.firmar(
+            comprobante.xml_generado,
+            certificado.certificado_encriptado,
+            certificado.clave_encriptada,
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"No se pudo firmar el XML: {exc}")
+    comprobante.estado = EstadoComprobanteEnum.FIRMADO
+    db.commit()
+    return {"mensaje": "XML firmado", "estado": comprobante.estado, "clave_acceso": comprobante.clave_acceso}
+
+
+@router.post("/comprobantes/{comprobante_id}/enviar-sri")
+async def enviar_comprobante_sri(
+    comprobante_id: int,
+    db: Session = Depends(get_db),
+    empresa: Empresa = Depends(get_current_empresa)
+):
+    """Envía el XML firmado al webservice de recepción del SRI."""
+    config = _configuracion_sri_activa(db, empresa.id)
+    comprobante = db.query(ComprobanteElectronico).filter(
+        and_(ComprobanteElectronico.id == comprobante_id, ComprobanteElectronico.empresa_id == empresa.id)
+    ).first()
+    if not comprobante:
+        raise HTTPException(status_code=404, detail="Comprobante no encontrado")
+    if not comprobante.xml_firmado:
+        raise HTTPException(status_code=400, detail="Primero debe firmar el comprobante")
+
+    sri = ServicioSRI(config.ambiente, sandbox=config.ambiente == "pruebas")
+    respuesta = await sri.enviar_comprobante(comprobante.xml_firmado)
+    comprobante.xml_respuesta_sri = respuesta.get("respuesta")
+    comprobante.mensaje_sri = respuesta.get("mensaje") or respuesta.get("estado")
+    comprobante.estado = EstadoComprobanteEnum.ENVIADO_SRI if respuesta.get("exito") else EstadoComprobanteEnum.RECHAZADO
+    db.add(LogSRI(
+        empresa_id=empresa.id,
+        comprobante_id=comprobante.id,
+        accion="enviar",
+        endpoint_sri=sri.URLS[sri.ambiente]["recepcion"],
+        request_xml=comprobante.xml_firmado,
+        response_xml=respuesta.get("respuesta"),
+        exito=bool(respuesta.get("exito")),
+        mensaje_error=None if respuesta.get("exito") else respuesta.get("mensaje"),
+        codigo_error=respuesta.get("estado"),
+    ))
+    db.commit()
+    return respuesta
+
+
+@router.post("/comprobantes/{comprobante_id}/consultar-autorizacion")
+async def consultar_autorizacion_comprobante(
+    comprobante_id: int,
+    db: Session = Depends(get_db),
+    empresa: Empresa = Depends(get_current_empresa)
+):
+    """Consulta autorización SRI y actualiza estado del comprobante."""
+    config = _configuracion_sri_activa(db, empresa.id)
+    comprobante = db.query(ComprobanteElectronico).filter(
+        and_(ComprobanteElectronico.id == comprobante_id, ComprobanteElectronico.empresa_id == empresa.id)
+    ).first()
+    if not comprobante:
+        raise HTTPException(status_code=404, detail="Comprobante no encontrado")
+    sri = ServicioSRI(config.ambiente, sandbox=config.ambiente == "pruebas")
+    respuesta = await sri.consultar_autorizacion(comprobante.clave_acceso)
+    comprobante.xml_respuesta_sri = respuesta.get("raw_xml")
+    comprobante.mensaje_sri = respuesta.get("mensaje")
+    comprobante.numero_autorizacion = respuesta.get("numero_autorizacion")
+    if respuesta.get("fecha_autorizacion"):
+        try:
+            comprobante.fecha_autorizacion = datetime.fromisoformat(str(respuesta["fecha_autorizacion"]).replace("Z", "+00:00"))
+        except ValueError:
+            comprobante.fecha_autorizacion = datetime.utcnow()
+    comprobante.estado = EstadoComprobanteEnum.AUTORIZADO if respuesta.get("exito") else EstadoComprobanteEnum.RECHAZADO
+    db.add(LogSRI(
+        empresa_id=empresa.id,
+        comprobante_id=comprobante.id,
+        accion="consultar_autorizacion",
+        endpoint_sri=sri.URLS[sri.ambiente]["autorizacion"],
+        request_xml=comprobante.clave_acceso,
+        response_xml=respuesta.get("raw_xml"),
+        exito=bool(respuesta.get("exito")),
+        mensaje_error=None if respuesta.get("exito") else respuesta.get("mensaje"),
+        codigo_error=respuesta.get("estado"),
+    ))
+    db.commit()
+    return respuesta
+
+
+# ==================== GUÍAS DE REMISIÓN ====================
+
+@router.post("/guias-remision/", status_code=status.HTTP_201_CREATED)
+async def crear_guia_remision(
+    data: GuiaRemisionCreate,
+    db: Session = Depends(get_db),
+    empresa: Empresa = Depends(get_current_empresa)
+):
+    """Crear guía de remisión electrónica con XML generado."""
+    config = _configuracion_sri_activa(db, empresa.id)
+    secuencial = _siguiente_secuencial(config, TipoComprobanteEnum.GUIA_REMISION, data.secuencial_personalizado)
+    fecha = datetime.utcnow()
+    ambiente_codigo = "2" if config.ambiente == "produccion" else "1"
+    clave_acceso = GeneradorClaveAcceso.generar(
+        fecha_emision=fecha,
+        tipo_comprobante=TipoComprobanteEnum.GUIA_REMISION.value,
+        ruc=config.ruc,
+        ambiente=ambiente_codigo,
+        establecimiento=config.establecimiento,
+        punto_emision=config.punto_emision,
+        secuencial=secuencial,
+        tipo_emision=config.tipo_emision or "1",
+    )
+    guia = GuiaRemision(
+        empresa_id=empresa.id,
+        establecimiento=config.establecimiento,
+        punto_emision=config.punto_emision,
+        secuencial=secuencial,
+        clave_acceso=clave_acceso,
+        fecha_inicio_transporte=data.fecha_inicio_transporte,
+        fecha_fin_transporte=data.fecha_fin_transporte,
+        destinatario_ruc=data.destinatario_ruc,
+        destinatario_razon_social=data.destinatario_razon_social,
+        destinatario_direccion=data.destinatario_direccion,
+        motivo_traslado=data.motivo_traslado,
+        placa_vehiculo=data.placa_vehiculo,
+        estado=EstadoComprobanteEnum.BORRADOR,
+    )
+    db.add(guia)
+    _incrementar_secuencia(config, TipoComprobanteEnum.GUIA_REMISION, data.secuencial_personalizado)
+    db.flush()
+    guia.xml_firmado = GeneradorXML.generar_guia_remision(guia, config, data.detalles)
+    db.commit()
+    db.refresh(guia)
+    return guia
+
+
+@router.post("/guias-remision/{guia_id}/firmar")
+async def firmar_guia_remision(
+    guia_id: int,
+    db: Session = Depends(get_db),
+    empresa: Empresa = Depends(get_current_empresa)
+):
+    """Firma la guía de remisión electrónica."""
+    config = _configuracion_sri_activa(db, empresa.id)
+    certificado = _certificado_activo(db, config.id)
+    guia = db.query(GuiaRemision).filter(and_(GuiaRemision.id == guia_id, GuiaRemision.empresa_id == empresa.id)).first()
+    if not guia:
+        raise HTTPException(status_code=404, detail="Guía de remisión no encontrada")
+    xml = GeneradorXML.generar_guia_remision(guia, config)
+    guia.xml_firmado = FirmadorXML.firmar(xml, certificado.certificado_encriptado, certificado.clave_encriptada)
+    guia.estado = EstadoComprobanteEnum.FIRMADO
+    db.commit()
+    return {"mensaje": "Guía firmada", "clave_acceso": guia.clave_acceso}
+
+
 # ==================== CONSULTAS SRI ====================
 
 @router.get("/consultar-ruc/{ruc}")
@@ -544,10 +922,21 @@ async def listar_tipos_iva():
     """Listar todos los tipos de IVA disponibles según SRI"""
     return {
         "tipos_iva": [
-            {"codigo": info["code"], "nombre": info["name"], "valor": info["value"] * 100 if info["value"] else None}
+            {"codigo_sri": info["code"], "codigo_interno": key, "nombre": info["name"], "porcentaje": info["value"] * 100}
             for key, info in IVA_CODES.items()
         ],
         "default": DEFAULT_IVA
+    }
+
+
+@router.get("/tarifas-ice/")
+async def listar_tarifas_ice():
+    """Listar tarifas ICE configuradas."""
+    return {
+        "tarifas_ice": [
+            {"codigo_sri": info["code"], "codigo_interno": key, "nombre": info["name"], "porcentaje": info["value"] * 100}
+            for key, info in ICE_CODES.items()
+        ]
     }
 
 
@@ -586,6 +975,22 @@ async def listar_regimenes():
             {"codigo": codigo, "nombre": nombre}
             for codigo, nombre in TAX_REGIMES.items()
         ]
+    }
+
+
+@router.get("/catalogos/")
+async def listar_catalogos_sri():
+    """Catálogos tributarios principales usados por ContaEC."""
+    return {
+        "iva": IVA_CODES,
+        "ice": ICE_CODES,
+        "retencion_renta": RETENTION_IR_CODES,
+        "retencion_iva": RETENTION_IVA_CODES,
+        "tipos_contribuyente": CONTRIBUTOR_TYPES,
+        "regimenes": TAX_REGIMES,
+        "tipos_comprobante": DOCUMENT_TYPES,
+        "estados_comprobante": DOCUMENT_STATUS,
+        "consumidor_final": CONSUMIDOR_FINAL,
     }
 
 

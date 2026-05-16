@@ -72,7 +72,7 @@ class PurchaseOrderItem(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     order_id = Column(Integer, ForeignKey("purchase_orders.id"), nullable=False)
-    product_id = Column(Integer, ForeignKey("products.id"), nullable=False)
+    product_id = Column(Integer, ForeignKey("productos.id"), nullable=False)
     
     quantity = Column(Float, nullable=False)
     received_quantity = Column(Float, default=0.0) # Para recepciones parciales
@@ -89,7 +89,7 @@ class PurchaseOrderItem(Base):
     
     # Relación
     order = relationship("PurchaseOrder", back_populates="items")
-    product = relationship("Product", back_populates="purchase_items")
+    product = relationship("Producto", back_populates="purchase_items")
 
 class AccountsPayable(Base):
     __tablename__ = "accounts_payable"

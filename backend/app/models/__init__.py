@@ -47,12 +47,6 @@ class User(Base):
     user_companies = relationship("UserCompany", back_populates="user", cascade="all, delete-orphan")
     license = relationship("License", back_populates="user", uselist=False, cascade="all, delete-orphan")
     configurations = relationship("UserConfiguration", back_populates="user", uselist=False, cascade="all, delete-orphan")
-    categorias_inventario = relationship("CategoriaProducto", back_populates="empresa", cascade="all, delete-orphan")
-    productos_inventario = relationship("Producto", back_populates="empresa", cascade="all, delete-orphan")
-    almacenes = relationship("Almacen", back_populates="empresa", cascade="all, delete-orphan")
-    clientes = relationship("Cliente", back_populates="empresa", cascade="all, delete-orphan")
-    productos_servicios = relationship("ProductoServicio", back_populates="empresa", cascade="all, delete-orphan")
-    comprobantes = relationship("ComprobanteElectronico", back_populates="empresa", cascade="all, delete-orphan")
 
 
 class Company(Base):
@@ -75,6 +69,19 @@ class Company(Base):
     owner = relationship("User", back_populates="companies")
     user_companies = relationship("UserCompany", back_populates="company", cascade="all, delete-orphan")
     configurations = relationship("CompanyConfiguration", back_populates="company", uselist=False, cascade="all, delete-orphan")
+    configuracion_sri = relationship("EmpresaConfiguracion", back_populates="empresa", uselist=False, cascade="all, delete-orphan")
+    categorias_inventario = relationship("CategoriaProducto", back_populates="empresa", cascade="all, delete-orphan")
+    productos_inventario = relationship("Producto", back_populates="empresa", cascade="all, delete-orphan")
+    almacenes = relationship("Almacen", back_populates="empresa", cascade="all, delete-orphan")
+    clientes = relationship("Cliente", back_populates="empresa", cascade="all, delete-orphan")
+    productos_servicios = relationship("ProductoServicio", back_populates="empresa", cascade="all, delete-orphan")
+    comprobantes = relationship("ComprobanteElectronico", back_populates="empresa", cascade="all, delete-orphan")
+    warehouses = relationship("Warehouse", back_populates="company", cascade="all, delete-orphan")
+    stock_levels = relationship("StockLevel", back_populates="company", cascade="all, delete-orphan")
+    suppliers = relationship("Supplier", back_populates="company", cascade="all, delete-orphan")
+    purchase_orders = relationship("PurchaseOrder", back_populates="company", cascade="all, delete-orphan")
+    budgets = relationship("Budget", back_populates="company", cascade="all, delete-orphan")
+    empleados = relationship("Employee", back_populates="company", cascade="all, delete-orphan")
 
 
 class UserCompany(Base):
@@ -230,49 +237,38 @@ from .inventario import (
 
 # Importar modelos de almacén
 from .warehouse import (
-    Warehouse as Almacen,
-    WarehouseLocation as UbicacionAlmacen,
-    StockLevel as StockUbicacion,
-    WarehouseTransfer as TransferenciaAlmacen,
-    WarehouseTransferItem as ItemTransferenciaAlmacen,
-    StockMovement as MovimientoStock
+    Warehouse, WarehouseLocation, StockLevel,
+    WarehouseTransfer, WarehouseTransferItem, StockMovement
 )
 
 # Importar modelos de compras
 from .purchase import (
-    Supplier as Proveedor,
-    PurchaseOrder as OrdenCompra,
-    PurchaseOrderItem as ItemOrdenCompra,
-    AccountsPayable as CuentaPagar,
-    OrderStatus as EstadoOrdenEnum
+    Supplier, PurchaseOrder, PurchaseOrderItem,
+    AccountsPayable, OrderStatus
 )
 
 # Importar modelos de CRM
 from .crm import (
-    Lead, Oportunidad, PipelineVenta, SeguimientoCRM,
-    EstadoLeadEnum, EtapaPipelineEnum
+    Lead, Opportunity, FollowUp, LeadStatus, OpportunityStage
 )
 
 # Importar modelos de proyectos
 from .projects import (
-    Proyecto, TareaProyecto, Timesheet, RecursoProyecto,
-    EstadoProyectoEnum, PrioridadEnum
+    Project, Task, TimeSheet, ProjectStatus, TaskStatus
 )
 
 # Importar modelos de integraciones
 from .integrations import (
-    ConexionBancaria, ExtractoBancario, IntegracionEcommerce,
-    TipoIntegracionEnum
+    BankStatement, EcommerceConnection, WebhookLog
 )
 
 # Importar modelos de presupuestos
 from .budget import (
-    PresupuestoAnual, LineaPresupuestaria, EjecucionPresupuesto,
-    EstadoPresupuestoEnum
+    Budget, BudgetLine
 )
 
 # Importar modelos de IA/ML
 from .ai import (
-    PrediccionVenta, DeteccionFraude, CategoriaAutomatica,
-    TipoAnalisisEnum
+    SalesPrediction, FraudAlert, AutoCategory, ChatbotConversation,
+    PredictionType, FraudAlertType
 )

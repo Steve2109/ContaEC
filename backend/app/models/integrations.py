@@ -22,7 +22,7 @@ class BankStatement(Base):
     saldo_despues = Column(Float)
     referencia = Column(String(100))
     conciliado = Column(Boolean, default=False)
-    partida_contable_id = Column(Integer, ForeignKey("accounting_entries.id"))
+    partida_contable_id = Column(Integer, nullable=True)
     creado_en = Column(DateTime, default=datetime.utcnow)
 
 class EcommerceConnection(Base):

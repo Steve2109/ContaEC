@@ -56,7 +56,7 @@ class StockLevel(Base):
     id = Column(Integer, primary_key=True, index=True)
     company_id = Column(Integer, ForeignKey("companies.id"), nullable=False)
     warehouse_id = Column(Integer, ForeignKey("warehouses.id"), nullable=False)
-    product_id = Column(Integer, ForeignKey("products.id"), nullable=False)
+    product_id = Column(Integer, ForeignKey("productos.id"), nullable=False)
     location_id = Column(Integer, ForeignKey("warehouse_locations.id"), nullable=True)
     
     quantity_on_hand = Column(Float, default=0.0) # Cantidad física actual
@@ -74,7 +74,7 @@ class StockLevel(Base):
 
     # Relaciones
     warehouse = relationship("Warehouse", back_populates="stock_levels")
-    product = relationship("Product", back_populates="stock_levels")
+    product = relationship("Producto", back_populates="stock_levels")
     location = relationship("WarehouseLocation", backref="stock_levels")
     company = relationship("Company", back_populates="stock_levels")
 
@@ -85,7 +85,7 @@ class StockMovement(Base):
     id = Column(Integer, primary_key=True, index=True)
     company_id = Column(Integer, ForeignKey("companies.id"), nullable=False)
     warehouse_id = Column(Integer, ForeignKey("warehouses.id"), nullable=False)
-    product_id = Column(Integer, ForeignKey("products.id"), nullable=False)
+    product_id = Column(Integer, ForeignKey("productos.id"), nullable=False)
     user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
     
     movement_type = Column(String(50), nullable=False) # COMPRA, VENTA, TRANSFERENCIA, AJUSTE, DEVOLUCION, PRODUCCION
@@ -108,7 +108,7 @@ class StockMovement(Base):
 
     # Relaciones
     warehouse = relationship("Warehouse", foreign_keys=[warehouse_id])
-    product = relationship("Product", back_populates="movements")
+    product = relationship("Producto", back_populates="movements")
     user = relationship("User")
     company = relationship("Company")
     origin_warehouse = relationship("Warehouse", foreign_keys=[origin_warehouse_id])
@@ -145,11 +145,11 @@ class WarehouseTransferItem(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     transfer_id = Column(Integer, ForeignKey("warehouse_transfers.id"), nullable=False)
-    product_id = Column(Integer, ForeignKey("products.id"), nullable=False)
+    product_id = Column(Integer, ForeignKey("productos.id"), nullable=False)
     
     quantity = Column(Float, nullable=False)
     quantity_received = Column(Float, default=0.0) # Puede diferir si hay mermas
     
     # Relación
     transfer = relationship("WarehouseTransfer", back_populates="items")
-    product = relationship("Product")
+    product = relationship("Producto")

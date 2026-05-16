@@ -15,7 +15,7 @@ class TipoComprobanteEnum(str, enum.Enum):
     NOTA_CREDITO = "04"
     NOTA_DEBITO = "05"
     RETENCION = "07"
-    GUIA_REMISION = "08"
+    GUIA_REMISION = "06"
     PROFORMA = "99"
 
 
@@ -71,12 +71,16 @@ class EmpresaConfiguracion(Base):
     __tablename__ = "empresa_configuracion"
     
     id = Column(Integer, primary_key=True, index=True)
-    empresa_id = Column(Integer, ForeignKey("empresas.id"), nullable=False)
+    empresa_id = Column(Integer, ForeignKey("companies.id"), nullable=False)
     
     # Datos del SRI
     ruc = Column(String(13), unique=True, nullable=False, index=True)
     razon_social = Column(String(200), nullable=False)
     nombre_comercial = Column(String(200))
+    direccion_matriz = Column(String(500), default="SIN DIRECCION")
+    direccion_establecimiento = Column(String(500), default="SIN DIRECCION")
+    contribuyente_especial = Column(String(20))
+    agente_retencion = Column(String(20))
     tipo_contribuyente = Column(SQLEnum(TipoContribuyenteEnum), default=TipoContribuyenteEnum.OBLIGADO_CONTABILIDAD)
     regimen_tributario = Column(SQLEnum(RegimenTributarioEnum), default=RegimenTributarioEnum.GENERAL)
     
@@ -97,7 +101,7 @@ class EmpresaConfiguracion(Base):
     fecha_actualizacion = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     
     # Relaciones
-    empresa = relationship("Empresa", back_populates="configuracion_sri")
+    empresa = relationship("Company", back_populates="configuracion_sri")
     certificados = relationship("CertificadoDigital", back_populates="empresa_config", uselist=False)
 
 
@@ -138,7 +142,7 @@ class Cliente(Base):
     __tablename__ = "clientes"
     
     id = Column(Integer, primary_key=True, index=True)
-    empresa_id = Column(Integer, ForeignKey("empresas.id"), nullable=False)
+    empresa_id = Column(Integer, ForeignKey("companies.id"), nullable=False)
     
     # Datos personales
     tipo_identificacion = Column(String(20), default="cedula")  # cedula, ruc, pasaporte
@@ -167,7 +171,7 @@ class Cliente(Base):
     actualizado_en = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     
     # Relaciones
-    empresa = relationship("Empresa", back_populates="clientes")
+    empresa = relationship("Company", back_populates="clientes")
     facturas = relationship("ComprobanteElectronico", back_populates="cliente")
     proformas = relationship("Proforma", back_populates="cliente", cascade="all, delete-orphan")
 
@@ -177,7 +181,7 @@ class ProductoServicio(Base):
     __tablename__ = "productos_servicios"
     
     id = Column(Integer, primary_key=True, index=True)
-    empresa_id = Column(Integer, ForeignKey("empresas.id"), nullable=False)
+    empresa_id = Column(Integer, ForeignKey("companies.id"), nullable=False)
     
     # Datos básicos
     codigo_interno = Column(String(50))
@@ -207,7 +211,7 @@ class ProductoServicio(Base):
     actualizado_en = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     
     # Relaciones
-    empresa = relationship("Empresa", back_populates="productos_servicios")
+    empresa = relationship("Company", back_populates="productos_servicios")
 
 
 class ComprobanteElectronico(Base):
@@ -215,7 +219,7 @@ class ComprobanteElectronico(Base):
     __tablename__ = "comprobantes_electronicos"
     
     id = Column(Integer, primary_key=True, index=True)
-    empresa_id = Column(Integer, ForeignKey("empresas.id"), nullable=False)
+    empresa_id = Column(Integer, ForeignKey("companies.id"), nullable=False)
     cliente_id = Column(Integer, ForeignKey("clientes.id"))
     
     # Tipo de comprobante
@@ -269,14 +273,14 @@ class ComprobanteElectronico(Base):
     pdf_generado = Column(Text)  # Base64 del PDF o ruta
     
     # Auditoría
-    creado_por = Column(Integer, ForeignKey("usuarios.id"))
+    creado_por = Column(Integer, ForeignKey("users.id"))
     creado_en = Column(DateTime, default=datetime.utcnow)
     actualizado_en = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     
     # Relaciones
-    empresa = relationship("Empresa", back_populates="comprobantes")
+    empresa = relationship("Company", back_populates="comprobantes")
     cliente = relationship("Cliente", back_populates="facturas")
-    creador = relationship("Usuario")
+    creador = relationship("User")
     detalles = relationship("ComprobanteDetalle", back_populates="comprobante", cascade="all, delete-orphan")
     impuestos = relationship("ComprobanteImpuesto", back_populates="comprobante", cascade="all, delete-orphan")
     retenciones = relationship("ComprobanteRetencion", back_populates="comprobante", cascade="all, delete-orphan")
@@ -364,7 +368,7 @@ class GuiaRemision(Base):
     __tablename__ = "guias_remision"
     
     id = Column(Integer, primary_key=True, index=True)
-    empresa_id = Column(Integer, ForeignKey("empresas.id"), nullable=False)
+    empresa_id = Column(Integer, ForeignKey("companies.id"), nullable=False)
     
     # Numeración
     establecimiento = Column(String(3), nullable=False)
@@ -397,7 +401,7 @@ class GuiaRemision(Base):
     creado_en = Column(DateTime, default=datetime.utcnow)
     
     # Relación
-    empresa = relationship("Empresa")
+    empresa = relationship("Company")
 
 
 class Proforma(Base):
@@ -405,7 +409,7 @@ class Proforma(Base):
     __tablename__ = "proformas"
     
     id = Column(Integer, primary_key=True, index=True)
-    empresa_id = Column(Integer, ForeignKey("empresas.id"), nullable=False)
+    empresa_id = Column(Integer, ForeignKey("companies.id"), nullable=False)
     cliente_id = Column(Integer, ForeignKey("clientes.id"))
     
     # Numeración interna
@@ -437,7 +441,7 @@ class Proforma(Base):
     actualizado_en = Column(DateTime, onupdate=datetime.utcnow)
     
     # Relaciones
-    empresa = relationship("Empresa")
+    empresa = relationship("Company")
     cliente = relationship("Cliente", back_populates="proformas")
     detalles = relationship("ComprobanteDetalle", back_populates="proforma", cascade="all, delete-orphan")
     comprobante = relationship("ComprobanteElectronico")
@@ -448,7 +452,7 @@ class LogSRI(Base):
     __tablename__ = "logs_sri"
     
     id = Column(Integer, primary_key=True, index=True)
-    empresa_id = Column(Integer, ForeignKey("empresas.id"))
+    empresa_id = Column(Integer, ForeignKey("companies.id"))
     comprobante_id = Column(Integer, ForeignKey("comprobantes_electronicos.id"))
     
     # Acción
@@ -468,5 +472,5 @@ class LogSRI(Base):
     creado_en = Column(DateTime, default=datetime.utcnow)
     
     # Relaciones
-    empresa = relationship("Empresa")
+    empresa = relationship("Company")
     comprobante = relationship("ComprobanteElectronico")

@@ -565,7 +565,7 @@ async def listar_asistencia(
 # ===================== REPORTES Y EXPORTACIÓN =====================
 
 @router.get("/rol-pago/{period_id}/pdf")
-async def generar rol_pago_pdf(
+async def generar_rol_pago_pdf(
     period_id: int,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)

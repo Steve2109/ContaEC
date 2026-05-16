@@ -9,10 +9,10 @@ IVA_CODES = {
     "0": {"code": "0", "name": "IVA 0%", "value": 0.00},
     "5": {"code": "5", "name": "IVA 5%", "value": 0.05},
     "8": {"code": "8", "name": "IVA 8%", "value": 0.08},
-    "12": {"code": "12", "name": "IVA 12%", "value": 0.12},
-    "13": {"code": "13", "name": "IVA 13%", "value": 0.13},
-    "14": {"code": "14", "name": "IVA 14%", "value": 0.14},
-    "15": {"code": "15", "name": "IVA 15% (Default)", "value": 0.15, "default": True},
+    "12": {"code": "2", "name": "IVA 12%", "value": 0.12},
+    "13": {"code": "10", "name": "IVA 13%", "value": 0.13},
+    "14": {"code": "3", "name": "IVA 14%", "value": 0.14},
+    "15": {"code": "4", "name": "IVA 15% (Default)", "value": 0.15, "default": True},
     "NO_OBJETO": {"code": "6", "name": "No objeto de impuesto", "value": 0.00},
     "EXENTO": {"code": "7", "name": "Exento de IVA", "value": 0.00},
     "DIFERENCIADO": {"code": "8", "name": "IVA diferenciado", "value": 0.00},
@@ -74,12 +74,11 @@ TAX_REGIMES = {
 # Tipos de Comprobantes Electrónicos
 DOCUMENT_TYPES = {
     "01": "Factura",
-    "02": "Nota de Débito",
-    "03": "Nota de Crédito",
-    "04": "Retención",
-    "05": "Guía de Remisión",
-    "06": "Ticket de Venta (Autorizado)",
-    "07": "Proforma (No tributario)",
+    "04": "Nota de Crédito",
+    "05": "Nota de Débito",
+    "06": "Guía de Remisión",
+    "07": "Comprobante de Retención",
+    "99": "Proforma (No tributario)",
 }
 
 # Estados del Comprobante Electrónico (Actualizado)

@@ -35,7 +35,7 @@ class Project(Base):
     fecha_fin_real = Column(Date)
     presupuesto = Column(Float, default=0.0)
     costo_total = Column(Float, default=0.0)
-    cliente_id = Column(Integer, ForeignKey("clients.id"))
+    cliente_id = Column(Integer, ForeignKey("clientes.id"))
     gerente_id = Column(Integer, ForeignKey("users.id"))
     creado_en = Column(DateTime, default=datetime.utcnow)
 

@@ -25,6 +25,21 @@ from ..utils.dependencies import get_current_user, get_current_admin_user, get_c
 router = APIRouter(prefix="/api/v1", tags=["Autenticación"])
 
 
+def check_license_active(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+) -> bool:
+    if current_user.is_admin:
+        return True
+    is_valid, _ = LicenseService.check_license_validity(db, current_user.id)
+    if not is_valid:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Licencia inválida o expirada"
+        )
+    return True
+
+
 @router.post("/auth/register", response_model=UserResponse, status_code=status.HTTP_201_CREATED)
 def register_user(
     user_data: UserCreate,

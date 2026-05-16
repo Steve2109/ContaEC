@@ -2,7 +2,7 @@
 Configuración central de la aplicación ContaEC
 """
 from pydantic_settings import BaseSettings
-from typing import Optional
+from typing import Optional, List
 import os
 
 
@@ -25,11 +25,13 @@ class Settings(BaseSettings):
     MASTER_ENCRYPTION_KEY: str = "cambia_esta_clave_maestra_por_una_mas_segura"
     
     # Rutas de archivos
-    BASE_DIR: str = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    UPLOAD_FOLDER: str = "/workspace/backend/static/uploads"
-    TEMP_UPLOAD_FOLDER: str = "/workspace/backend/static/uploads/temp"
-    PERMANENT_UPLOAD_FOLDER: str = "/workspace/backend/static/uploads/permanent"
-    BACKUP_FOLDER: str = "/workspace/backend/backups"
+    BASE_DIR: str = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    UPLOAD_FOLDER: str = os.path.join(BASE_DIR, "static", "uploads")
+    TEMP_UPLOAD_FOLDER: str = os.path.join(BASE_DIR, "static", "uploads", "temp")
+    PERMANENT_UPLOAD_FOLDER: str = os.path.join(BASE_DIR, "static", "uploads", "permanent")
+    EXPORT_TEMP_FOLDER: str = os.path.join(BASE_DIR, "static", "exports", "temp")
+    BACKUP_FOLDER: str = os.path.join(BASE_DIR, "backups")
+    TEMP_FILE_TTL_MINUTES: int = 60
     
     # ClamAV Configuration
     CLAMAV_ENABLED: bool = True
@@ -51,6 +53,7 @@ class Settings(BaseSettings):
     
     # Rate Limiting
     RATE_LIMIT_PER_MINUTE: int = 60
+    CORS_ORIGINS: str = "https://conta.tymtechnology.shop,http://10.0.1.20"
     
     # Logging
     LOG_LEVEL: str = "INFO"

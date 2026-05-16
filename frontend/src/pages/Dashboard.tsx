@@ -1,6 +1,5 @@
 import React, { useEffect, useState } from 'react';
 import { useStore } from '../store/useStore';
-import { adminService } from '../services/api';
 import { BarChart, Bar, LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
 
 const Dashboard: React.FC = () => {

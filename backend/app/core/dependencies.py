@@ -7,8 +7,8 @@ from sqlalchemy.orm import Session
 from typing import Optional
 
 from app.core.database import get_db
-from app.api.auth import get_current_user
 from app.models import User, Company, UserCompany
+from app.utils.dependencies import get_current_user
 
 
 def get_current_empresa(

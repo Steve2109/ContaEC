@@ -173,6 +173,17 @@ export interface PurchaseOrder {
   status: 'borrador' | 'aprobada' | 'recibida_parcial' | 'recibida_total' | 'cancelada';
 }
 
+export interface PurchaseOrderItem {
+  product_id: string;
+  description: string;
+  quantity: number;
+  received_quantity: number;
+  unit_price: number;
+  subtotal: number;
+  tax_amount: number;
+  total: number;
+}
+
 export interface CRMLead {
   id: string;
   company_id: string;
@@ -196,6 +207,13 @@ export interface Project {
   end_date: string;
   status: 'planificacion' | 'en_curso' | 'pausado' | 'completado' | 'cancelado';
   team: ProjectMember[];
+}
+
+export interface ProjectMember {
+  user_id: string;
+  full_name: string;
+  role: string;
+  hourly_rate?: number;
 }
 
 export interface Budget {

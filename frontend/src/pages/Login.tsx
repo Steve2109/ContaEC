@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { authService } from '../services/api';
+import { authService, companyService, licenseService } from '../services/api';
 import { useStore } from '../store/useStore';
 import toast from 'react-hot-toast';
 
@@ -18,13 +18,17 @@ const Login: React.FC = () => {
     try {
       const data = await authService.login(email, password);
       setToken(data.access_token);
-      setUser(data.user);
+      const user = await authService.me();
+      setUser(user);
       
       // Cargar datos iniciales
-      const companies = await import('../services/api').then(m => m.companyService.getAll());
+      const companies = await companyService.getAll();
+      setCompanies(companies);
       if (companies.length > 0) {
         setCurrentCompany(companies[0]);
       }
+      const license = await licenseService.getMyLicense();
+      setLicense(license);
       
       toast.success('¡Bienvenido a ContaEC!');
       navigate('/');

@@ -1,7 +1,7 @@
 import axios from 'axios';
 import type { User, Company, License, Invoice, Product, Employee } from '../types';
 
-const API_BASE_URL = '/api/v1';
+const API_BASE_URL = '';
 
 const api = axios.create({
   baseURL: API_BASE_URL,
@@ -33,101 +33,101 @@ api.interceptors.response.use(
 
 export const authService = {
   login: async (email: string, password: string) => {
-    const response = await api.post('/auth/login', { email, password });
+    const response = await api.post('/api/v1/auth/login', { email, password });
     return response.data;
   },
   register: async (data: any) => {
-    const response = await api.post('/auth/register', data);
+    const response = await api.post('/api/v1/auth/register', data);
     return response.data;
   },
   me: async () => {
-    const response = await api.get<User>('/auth/me');
+    const response = await api.get<User>('/api/v1/auth/me');
     return response.data;
   },
 };
 
 export const companyService = {
   getAll: async () => {
-    const response = await api.get<Company[]>('/companies');
+    const response = await api.get<Company[]>('/api/v1/companies');
     return response.data;
   },
   getByRuc: async (ruc: string) => {
-    const response = await api.get<Company>(`/companies/${ruc}`);
+    const response = await api.get<Company>(`/api/v1/companies/${ruc}`);
     return response.data;
   },
   create: async (data: Partial<Company>) => {
-    const response = await api.post<Company>('/companies', data);
+    const response = await api.post<Company>('/api/v1/companies', data);
     return response.data;
   },
   update: async (id: string, data: Partial<Company>) => {
-    const response = await api.put<Company>(`/companies/${id}`, data);
+    const response = await api.put<Company>(`/api/v1/companies/${id}`, data);
     return response.data;
   },
 };
 
 export const licenseService = {
   getMyLicense: async () => {
-    const response = await api.get<License>('/license');
+    const response = await api.get<License>('/api/v1/license');
     return response.data;
   },
 };
 
 export const invoiceService = {
   getAll: async (companyId: string) => {
-    const response = await api.get<Invoice[]>(`/invoices?company_id=${companyId}`);
+    const response = await api.get<Invoice[]>(`/facturacion/facturas/?company_id=${companyId}`);
     return response.data;
   },
   create: async (data: Partial<Invoice>) => {
-    const response = await api.post<Invoice>('/invoices', data);
+    const response = await api.post<Invoice>('/facturacion/facturas/', data);
     return response.data;
   },
   authorize: async (id: string) => {
-    const response = await api.post<Invoice>(`/invoices/${id}/authorize`);
+    const response = await api.post<Invoice>(`/facturacion/facturas/${id}/autorizar`);
     return response.data;
   },
 };
 
 export const productService = {
   getAll: async (companyId: string) => {
-    const response = await api.get<Product[]>(`/products?company_id=${companyId}`);
+    const response = await api.get<Product[]>(`/inventario/productos/?company_id=${companyId}`);
     return response.data;
   },
   create: async (data: Partial<Product>) => {
-    const response = await api.post<Product>('/products', data);
+    const response = await api.post<Product>('/inventario/productos/', data);
     return response.data;
   },
   update: async (id: string, data: Partial<Product>) => {
-    const response = await api.put<Product>(`/products/${id}`, data);
+    const response = await api.put<Product>(`/inventario/productos/${id}`, data);
     return response.data;
   },
 };
 
 export const employeeService = {
   getAll: async (companyId: string) => {
-    const response = await api.get<Employee[]>(`/employees?company_id=${companyId}`);
+    const response = await api.get<Employee[]>(`/api/nomina/empleados?company_id=${companyId}`);
     return response.data;
   },
   create: async (data: Partial<Employee>) => {
-    const response = await api.post<Employee>('/employees', data);
+    const response = await api.post<Employee>('/api/nomina/empleados', data);
     return response.data;
   },
 };
 
 export const adminService = {
   getDashboardSummary: async () => {
-    const response = await api.get('/admin/dashboard/summary');
+    const response = await api.get('/api/v1/admin/dashboard/summary');
     return response.data;
   },
   getHealth: async () => {
-    const response = await api.get('/admin/dashboard/health');
+    const response = await api.get('/api/v1/admin/dashboard/health');
     return response.data;
   },
   getUsers: async () => {
-    const response = await api.get('/admin/users');
+    const response = await api.get('/api/v1/admin/users');
     return response.data;
   },
   updateLicense: async (userId: string, data: any) => {
-    const response = await api.put(`/admin/licenses/${userId}`, data);
+    const response = await api.put(`/api/v1/admin/licenses/${userId}`, data);
     return response.data;
   },
 };

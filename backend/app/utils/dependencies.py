@@ -117,6 +117,49 @@ def get_client_ip(request: Request) -> Optional[str]:
     return request.client.host if request.client else None
 
 
+def verify_company_access(
+    db: Session = Depends(get_db),
+    user_id: Optional[int] = None,
+    company_id: Optional[int] = None,
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Verifica acceso multiempresa. Puede usarse como dependencia o como función directa:
+    verify_company_access(db, user_id, company_id).
+    """
+    effective_user_id = user_id or current_user.id
+    if company_id is None:
+        company = db.query(__import__("app.models", fromlist=["Company"]).Company).filter(
+            __import__("app.models", fromlist=["Company"]).Company.owner_id == effective_user_id
+        ).first()
+        if company:
+            return company
+        membership = db.query(__import__("app.models", fromlist=["UserCompany"]).UserCompany).filter(
+            __import__("app.models", fromlist=["UserCompany"]).UserCompany.user_id == effective_user_id
+        ).first()
+        if membership:
+            return membership.company
+    else:
+        from app.models import Company, UserCompany
+        company = db.query(Company).filter(
+            Company.id == company_id,
+            Company.owner_id == effective_user_id
+        ).first()
+        if company:
+            return company
+        membership = db.query(UserCompany).filter(
+            UserCompany.company_id == company_id,
+            UserCompany.user_id == effective_user_id
+        ).first()
+        if membership:
+            return membership.company
+
+    raise HTTPException(
+        status_code=status.HTTP_403_FORBIDDEN,
+        detail="No tiene acceso a esta empresa"
+    )
+
+
 def sanitize_input(value: str) -> str:
     """
     Sanitiza entradas de texto para prevenir XSS e inyecciones

@@ -44,7 +44,7 @@ class CategoriaProducto(Base):
     __tablename__ = "categorias_productos"
     
     id = Column(Integer, primary_key=True, index=True)
-    empresa_id = Column(Integer, ForeignKey("empresas.id"), nullable=False)
+    empresa_id = Column(Integer, ForeignKey("companies.id"), nullable=False)
     
     nombre = Column(String(100), nullable=False)
     descripcion = Column(Text)
@@ -57,7 +57,7 @@ class CategoriaProducto(Base):
     creado_en = Column(DateTime, default=datetime.utcnow)
     
     # Relaciones
-    empresa = relationship("Empresa", back_populates="categorias_inventario")
+    empresa = relationship("Company", back_populates="categorias_inventario")
     productos = relationship("Producto", back_populates="categoria")
     padre = relationship("CategoriaProducto", remote_side=[id], backref="hijos")
 
@@ -67,7 +67,7 @@ class Producto(Base):
     __tablename__ = "productos"
     
     id = Column(Integer, primary_key=True, index=True)
-    empresa_id = Column(Integer, ForeignKey("empresas.id"), nullable=False)
+    empresa_id = Column(Integer, ForeignKey("companies.id"), nullable=False)
     categoria_id = Column(Integer, ForeignKey("categorias_productos.id"))
     
     # Identificación
@@ -124,14 +124,17 @@ class Producto(Base):
     # Auditoría
     creado_en = Column(DateTime, default=datetime.utcnow)
     actualizado_en = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
-    creado_por = Column(Integer, ForeignKey("usuarios.id"))
+    creado_por = Column(Integer, ForeignKey("users.id"))
     
     # Relaciones
-    empresa = relationship("Empresa", back_populates="productos_inventario")
+    empresa = relationship("Company", back_populates="productos_inventario")
     categoria = relationship("CategoriaProducto", back_populates="productos")
     stocks = relationship("StockProducto", back_populates="producto", cascade="all, delete-orphan")
     movimientos = relationship("MovimientoInventario", back_populates="producto", cascade="all, delete-orphan")
     lotes = relationship("LoteProducto", back_populates="producto", cascade="all, delete-orphan")
+    stock_levels = relationship("StockLevel", back_populates="product", cascade="all, delete-orphan")
+    movements = relationship("StockMovement", back_populates="product", cascade="all, delete-orphan")
+    purchase_items = relationship("PurchaseOrderItem", back_populates="product")
 
 
 class Almacen(Base):
@@ -139,7 +142,7 @@ class Almacen(Base):
     __tablename__ = "almacenes"
     
     id = Column(Integer, primary_key=True, index=True)
-    empresa_id = Column(Integer, ForeignKey("empresas.id"), nullable=False)
+    empresa_id = Column(Integer, ForeignKey("companies.id"), nullable=False)
     
     nombre = Column(String(100), nullable=False)
     codigo = Column(String(20), unique=True)
@@ -156,7 +159,7 @@ class Almacen(Base):
     creado_en = Column(DateTime, default=datetime.utcnow)
     
     # Relaciones
-    empresa = relationship("Empresa", back_populates="almacenes")
+    empresa = relationship("Company", back_populates="almacenes")
     stocks = relationship("StockProducto", back_populates="almacen")
     ubicaciones = relationship("UbicacionAlmacen", back_populates="almacen", cascade="all, delete-orphan")
 
@@ -226,7 +229,7 @@ class MovimientoInventario(Base):
     __tablename__ = "movimientos_inventario"
     
     id = Column(Integer, primary_key=True, index=True)
-    empresa_id = Column(Integer, ForeignKey("empresas.id"), nullable=False)
+    empresa_id = Column(Integer, ForeignKey("companies.id"), nullable=False)
     producto_id = Column(Integer, ForeignKey("productos.id"), nullable=False)
     almacen_id = Column(Integer, ForeignKey("almacenes.id"), nullable=False)
     ubicacion_id = Column(Integer, ForeignKey("ubicaciones_almacen.id"))
@@ -264,15 +267,15 @@ class MovimientoInventario(Base):
     
     # Auditoría
     fecha_movimiento = Column(DateTime, default=datetime.utcnow, nullable=False)
-    creado_por = Column(Integer, ForeignKey("usuarios.id"))
+    creado_por = Column(Integer, ForeignKey("users.id"))
     creado_en = Column(DateTime, default=datetime.utcnow)
     
     # Relaciones
-    empresa = relationship("Empresa")
+    empresa = relationship("Company")
     producto = relationship("Producto", back_populates="movimientos")
     almacen = relationship("Almacen")
     ubicacion = relationship("UbicacionAlmacen")
-    creador = relationship("Usuario")
+    creador = relationship("User")
     lote = relationship("LoteProducto")
 
 
@@ -281,7 +284,7 @@ class LoteProducto(Base):
     __tablename__ = "lotes_productos"
     
     id = Column(Integer, primary_key=True, index=True)
-    empresa_id = Column(Integer, ForeignKey("empresas.id"), nullable=False)
+    empresa_id = Column(Integer, ForeignKey("companies.id"), nullable=False)
     producto_id = Column(Integer, ForeignKey("productos.id"), nullable=False)
     
     codigo_lote = Column(String(50), nullable=False)
@@ -299,7 +302,7 @@ class LoteProducto(Base):
     creado_en = Column(DateTime, default=datetime.utcnow)
     
     # Relaciones
-    empresa = relationship("Empresa")
+    empresa = relationship("Company")
     producto = relationship("Producto", back_populates="lotes")
     movimientos = relationship("MovimientoInventario", back_populates="lote")
 
@@ -309,7 +312,7 @@ class AjusteInventario(Base):
     __tablename__ = "ajustes_inventario"
     
     id = Column(Integer, primary_key=True, index=True)
-    empresa_id = Column(Integer, ForeignKey("empresas.id"), nullable=False)
+    empresa_id = Column(Integer, ForeignKey("companies.id"), nullable=False)
     almacen_id = Column(Integer, ForeignKey("almacenes.id"), nullable=False)
     
     numero_ajuste = Column(String(20), unique=True)
@@ -322,8 +325,8 @@ class AjusteInventario(Base):
     
     valor_total_ajuste = Column(Numeric(14, 2), default=0.0)
     
-    creado_por = Column(Integer, ForeignKey("usuarios.id"))
-    aprobado_por = Column(Integer, ForeignKey("usuarios.id"))
+    creado_por = Column(Integer, ForeignKey("users.id"))
+    aprobado_por = Column(Integer, ForeignKey("users.id"))
     creado_en = Column(DateTime, default=datetime.utcnow)
     aprobado_en = Column(DateTime)
     
@@ -331,10 +334,10 @@ class AjusteInventario(Base):
     items = relationship("AjusteInventarioItem", back_populates="ajuste", cascade="all, delete-orphan")
     
     # Relaciones
-    empresa = relationship("Empresa")
+    empresa = relationship("Company")
     almacen = relationship("Almacen")
-    creador = relationship("Usuario", foreign_keys=[creado_por])
-    aprobador = relationship("Usuario", foreign_keys=[aprobado_por])
+    creador = relationship("User", foreign_keys=[creado_por])
+    aprobador = relationship("User", foreign_keys=[aprobado_por])
 
 
 class AjusteInventarioItem(Base):
@@ -369,8 +372,8 @@ class ArchivoImportacionExportacion(Base):
     __tablename__ = "archivos_import_export"
     
     id = Column(Integer, primary_key=True, index=True)
-    empresa_id = Column(Integer, ForeignKey("empresas.id"), nullable=False)
-    usuario_id = Column(Integer, ForeignKey("usuarios.id"), nullable=False)
+    empresa_id = Column(Integer, ForeignKey("companies.id"), nullable=False)
+    usuario_id = Column(Integer, ForeignKey("users.id"), nullable=False)
     
     nombre_archivo_original = Column(String(255), nullable=False)
     nombre_archivo_servidor = Column(String(255), nullable=False)
@@ -398,5 +401,5 @@ class ArchivoImportacionExportacion(Base):
     fecha_eliminacion = Column(DateTime)  # Cuando se eliminó
     
     # Relaciones
-    empresa = relationship("Empresa")
-    usuario = relationship("Usuario")
+    empresa = relationship("Company")
+    usuario = relationship("User")

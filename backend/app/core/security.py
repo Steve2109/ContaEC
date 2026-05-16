@@ -9,6 +9,8 @@ from typing import Optional, Any
 from jose import jwt, JWTError
 from passlib.context import CryptContext
 from cryptography.fernet import Fernet
+import base64
+import hashlib
 from .config import settings
 
 # Contexto para hash de contraseñas
@@ -19,12 +21,8 @@ def get_fernet() -> Fernet:
     """
     Obtiene instancia de Fernet para encriptación/desencriptación
     """
-    key = settings.MASTER_ENCRYPTION_KEY.encode()
-    # Asegurar que la clave tenga el formato correcto (32 bytes)
-    if len(key) < 32:
-        key = key.ljust(32, b'=')
-    elif len(key) > 32:
-        key = key[:32]
+    raw_key = settings.MASTER_ENCRYPTION_KEY.encode("utf-8")
+    key = base64.urlsafe_b64encode(hashlib.sha256(raw_key).digest())
     return Fernet(key)
 
 

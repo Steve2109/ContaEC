@@ -3,6 +3,7 @@ Rutas de escaneo de archivos con ClamAV
 """
 import os
 import shutil
+from pathlib import Path
 from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File, Form, Request
 from sqlalchemy.orm import Session
@@ -36,7 +37,8 @@ async def upload_file(
     """
     # Verificar que el tipo de archivo sea permitido
     allowed_extensions = ['.xlsx', '.xls', '.csv', '.zip', '.pdf', '.xml', '.txt']
-    file_ext = os.path.splitext(file.filename)[1].lower() if file.filename else ''
+    safe_name = Path(file.filename or "").name
+    file_ext = os.path.splitext(safe_name)[1].lower() if safe_name else ''
     
     if file_ext not in allowed_extensions:
         raise HTTPException(
@@ -49,7 +51,7 @@ async def upload_file(
     os.makedirs(settings.PERMANENT_UPLOAD_FOLDER, exist_ok=True)
     
     # Guardar archivo temporalmente
-    temp_file_path = os.path.join(settings.TEMP_UPLOAD_FOLDER, f"{current_user.id}_{file.filename}")
+    temp_file_path = os.path.join(settings.TEMP_UPLOAD_FOLDER, f"{current_user.id}_{safe_name}")
     
     try:
         async with aiofiles.open(temp_file_path, 'wb') as out_file:
@@ -61,7 +63,7 @@ async def upload_file(
         is_safe, message, threat_name = scanner.scan_file(
             db=db,
             file_path=temp_file_path,
-            file_name=file.filename,
+            file_name=safe_name,
             user_id=current_user.id,
             use_virustotal=use_virustotal
         )
@@ -76,14 +78,15 @@ async def upload_file(
         # Mover archivo a ubicación permanente
         permanent_file_path = os.path.join(
             settings.PERMANENT_UPLOAD_FOLDER,
-            f"user_{current_user_id}/{file.filename}"
+            f"user_{current_user.id}",
+            safe_name
         )
         os.makedirs(os.path.dirname(permanent_file_path), exist_ok=True)
         shutil.move(temp_file_path, permanent_file_path)
         
         return {
             "message": "Archivo subido y escaneado exitosamente",
-            "filename": file.filename,
+            "filename": safe_name,
             "path": permanent_file_path,
             "size": len(content),
             "scan_result": "CLEAN"
@@ -144,7 +147,8 @@ async def delete_temp_file(
     """
     Elimina un archivo temporal (limpieza automática)
     """
-    temp_file_path = os.path.join(settings.TEMP_UPLOAD_FOLDER, f"{current_user.id}_{file_name}")
+    safe_name = Path(file_name).name
+    temp_file_path = os.path.join(settings.TEMP_UPLOAD_FOLDER, f"{current_user.id}_{safe_name}")
     
     if os.path.exists(temp_file_path):
         os.remove(temp_file_path)

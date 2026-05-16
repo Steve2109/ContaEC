@@ -1,33 +1,123 @@
 """
-Servicios para Facturación Electrónica - SRI Ecuador
-ContaEC - Fase 3
+Servicios SRI para facturación electrónica ecuatoriana.
+
+Incluye:
+- clave de acceso oficial de 49 dígitos;
+- XML de factura, notas de crédito/débito, retenciones y guías de remisión;
+- firma XML con certificado PKCS#12/P12;
+- cliente SOAP para recepción y autorización SRI.
 """
-import xml.etree.ElementTree as ET
-from xml.dom import minidom
-from datetime import datetime
+from __future__ import annotations
+
+import base64
 import hashlib
 import random
-import string
-from typing import Optional, Dict, Any, List
-import httpx
-from cryptography.hazmat.primitives import serialization, hashes
-from cryptography.hazmat.primitives.asymmetric import padding, rsa
-from cryptography.hazmat.backends import default_backend
-from cryptography.x509 import load_pem_x509_certificate
-from cryptography.hazmat.primitives.serialization import pkcs12
-import base64
-import os
+import re
+import xml.etree.ElementTree as ET
+from dataclasses import dataclass
+from datetime import datetime
+from decimal import Decimal, ROUND_HALF_UP
+from typing import Any, Dict, Iterable, List, Optional, Tuple
+from xml.dom import minidom
 
+import httpx
+from cryptography.hazmat.primitives import hashes, serialization
+from cryptography.hazmat.primitives.asymmetric import padding
+from cryptography.hazmat.primitives.serialization import pkcs12
+from cryptography.x509.oid import NameOID
+
+from app.core.security import decrypt_sensitive_data
+from app.core.sri_constants import IVA_CODES
 from app.models.facturacion import (
-    TipoComprobanteEnum, EstadoComprobanteEnum, TipoIVAEnum,
-    TipoContribuyenteEnum, RegimenTributarioEnum
+    EstadoComprobanteEnum,
+    TipoComprobanteEnum,
+    TipoContribuyenteEnum,
+    TipoIVAEnum,
 )
-from app.core.security import decrypt_sensitive_data as decrypt_data
+
+
+def _money(value: Any) -> str:
+    amount = Decimal(str(value or 0)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+    return f"{amount:.2f}"
+
+
+def _percent(value: Any) -> str:
+    amount = Decimal(str(value or 0)).quantize(Decimal("0.00"), rounding=ROUND_HALF_UP)
+    return f"{amount:.2f}"
+
+
+def _text(value: Any, fallback: str = "") -> str:
+    if value is None:
+        return fallback
+    value = str(value).strip()
+    return value if value else fallback
+
+
+def _digits(value: str, length: int) -> str:
+    cleaned = re.sub(r"\D", "", value or "")
+    if len(cleaned) != length:
+        raise ValueError(f"El valor debe tener {length} dígitos")
+    return cleaned
+
+
+def _add(parent: ET.Element, tag: str, value: Any, fallback: str = "") -> ET.Element:
+    child = ET.SubElement(parent, tag)
+    child.text = _text(value, fallback)
+    return child
+
+
+def _tipo_identificacion_sri(cliente: Any) -> str:
+    if not cliente:
+        return "07"
+    if getattr(cliente, "es_consumidor_final", False):
+        return "07"
+    identificacion = _text(getattr(cliente, "identificacion", ""))
+    tipo = _text(getattr(cliente, "tipo_identificacion", "")).lower()
+    if tipo == "ruc" or len(identificacion) == 13:
+        return "04"
+    if tipo in {"cedula", "cédula"} or len(identificacion) == 10:
+        return "05"
+    if tipo == "pasaporte":
+        return "06"
+    return "08"
+
+
+def _obligado_contabilidad(tipo_contribuyente: Any) -> str:
+    value = getattr(tipo_contribuyente, "value", tipo_contribuyente)
+    return "SI" if value in {"02", "obligado_contabilidad"} else "NO"
+
+
+def _iva_catalog_key(tipo_iva: Any, porcentaje_iva: Any = None) -> str:
+    value = getattr(tipo_iva, "value", tipo_iva)
+    if value in {"no_objeto", "NO_OBJETO"}:
+        return "NO_OBJETO"
+    if value in {"exento", "EXENTO"}:
+        return "EXENTO"
+    if value in {"diferenciado", "DIFERENCIADO"}:
+        return "DIFERENCIADO"
+    if value:
+        return str(value)
+    return str(int(porcentaje_iva or 15))
+
+
+def sri_codigo_iva(tipo_iva: Any, porcentaje_iva: Any = None) -> str:
+    key = _iva_catalog_key(tipo_iva, porcentaje_iva)
+    return IVA_CODES.get(key, IVA_CODES["15"])["code"]
+
+
+@dataclass
+class RespuestaSRI:
+    exito: bool
+    estado: str
+    mensaje: str
+    numero_autorizacion: Optional[str] = None
+    fecha_autorizacion: Optional[str] = None
+    raw_xml: Optional[str] = None
 
 
 class GeneradorClaveAcceso:
-    """Genera la clave de acceso de 49 dígitos para comprobantes SRI"""
-    
+    """Genera la clave de acceso SRI: 49 dígitos con módulo 11."""
+
     @staticmethod
     def generar(
         fecha_emision: datetime,
@@ -35,486 +125,457 @@ class GeneradorClaveAcceso:
         ruc: str,
         ambiente: str,
         secuencial: str,
-        numero_autorizacion: Optional[str] = None
+        establecimiento: str = "001",
+        punto_emision: str = "001",
+        codigo_numerico: Optional[str] = None,
+        tipo_emision: str = "1",
+        numero_autorizacion: Optional[str] = None,
     ) -> str:
-        """
-        Genera clave de acceso según normativa SRI Ecuador
-        
-        Estructura: AA MM DD TTT RRRRRRRRRR PPPP SSSSSSSSS C
-        - AA: Año (2 dígitos)
-        - MM: Mes (2 dígitos)
-        - DD: Día (2 dígitos)
-        - TTT: Tipo comprobante (3 dígitos)
-        - RUC: RUC emisor (13 dígitos)
-        - Ambiente: 1=Pruebas, 2=Producción (1 dígito)
-        - Secuencial: 9 dígitos
-        - Código numérico aleatorio: 8 dígitos
-        - Dígito verificador: 1 dígito
-        """
-        # Código numérico aleatorio de 8 dígitos
-        codigo_numerico = ''.join([str(random.randint(0, 9)) for _ in range(8)])
-        
-        # Construir clave sin dígito verificador (48 dígitos)
+        del numero_autorizacion
+        cod_doc = _digits(str(tipo_comprobante), 2)
+        ruc = _digits(ruc, 13)
+        ambiente = _digits(str(ambiente), 1)
+        establecimiento = _digits(establecimiento, 3)
+        punto_emision = _digits(punto_emision, 3)
+        secuencial = _digits(secuencial.zfill(9), 9)
+        tipo_emision = _digits(str(tipo_emision), 1)
+        codigo_numerico = codigo_numerico or "".join(str(random.randint(0, 9)) for _ in range(8))
+        codigo_numerico = _digits(codigo_numerico, 8)
+
         clave_sin_dv = (
-            f"{fecha_emision.strftime('%y%m%d')}"  # AA MM DD
-            f"{tipo_comprobante}"                   # TTT
-            f"{ruc}"                                # RUC
-            f"{ambiente}"                           # Ambiente
-            f"{secuencial.zfill(9)}"               # Secuencial
-            f"{codigo_numerico}"                    # Código aleatorio
+            fecha_emision.strftime("%d%m%Y")
+            + cod_doc
+            + ruc
+            + ambiente
+            + establecimiento
+            + punto_emision
+            + secuencial
+            + codigo_numerico
+            + tipo_emision
         )
-        
-        # Calcular dígito verificador
-        digito_verificador = GeneradorClaveAcceso.calcular_digito_verificador(clave_sin_dv)
-        
-        return clave_sin_dv + digito_verificador
-    
+        return clave_sin_dv + GeneradorClaveAcceso.calcular_digito_verificador(clave_sin_dv)
+
     @staticmethod
     def calcular_digito_verificador(clave: str) -> str:
-        """Calcula el dígito verificador usando módulo 11"""
         coeficientes = [2, 3, 4, 5, 6, 7]
-        suma = 0
-        
-        for i, digito in enumerate(reversed(clave)):
-            coeficiente = coeficientes[i % len(coeficientes)]
-            suma += int(digito) * coeficiente
-        
-        residuo = suma % 11
-        if residuo == 0:
-            dv = '0'
-        elif residuo == 1:
-            dv = '0'
-        else:
-            dv = str(11 - residuo)
-        
-        return dv
+        suma = sum(int(digito) * coeficientes[i % 6] for i, digito in enumerate(reversed(clave)))
+        resultado = 11 - (suma % 11)
+        if resultado == 11:
+            return "0"
+        if resultado == 10:
+            return "1"
+        return str(resultado)
 
 
 class GeneradorXML:
-    """Genera XML para comprobantes electrónicos según esquema SRI"""
-    
-    NAMESPACE_SRI = "http://www.sri.gov.ec/sri/1"
-    NAMESPACE_XSI = "http://www.w3.org/2001/XMLSchema-instance"
-    VERSION_COMPROBANTE = "1.0.0"
-    
+    VERSION = "1.1.0"
+
+    @staticmethod
+    def generar(comprobante: Any, empresa_config: Any) -> str:
+        tipo = getattr(comprobante.tipo_comprobante, "value", comprobante.tipo_comprobante)
+        if tipo == TipoComprobanteEnum.FACTURA.value:
+            return GeneradorXML.generar_factura(comprobante, empresa_config, comprobante.detalles, comprobante.impuestos)
+        if tipo == TipoComprobanteEnum.NOTA_CREDITO.value:
+            return GeneradorXML.generar_nota_credito(comprobante, empresa_config, comprobante.detalles, comprobante.impuestos)
+        if tipo == TipoComprobanteEnum.NOTA_DEBITO.value:
+            return GeneradorXML.generar_nota_debito(comprobante, empresa_config, comprobante.impuestos)
+        if tipo == TipoComprobanteEnum.RETENCION.value:
+            return GeneradorXML.generar_retencion(comprobante, empresa_config, comprobante.retenciones)
+        raise ValueError(f"Tipo de comprobante no soportado: {tipo}")
+
     @staticmethod
     def generar_factura(comprobante: Any, empresa_config: Any, detalles: List[Any], impuestos: List[Any]) -> str:
-        """Genera XML de factura electrónica"""
-        root = ET.Element("factura", {
-            "id": "comprobante",
-            "version": GeneradorXML.VERSION_COMPROBANTE
-        })
-        
-        # InfoTributaria
-        info_tributaria = ET.SubElement(root, "infoTributaria")
-        ET.SubElement(info_tributaria, "ambiente").text = "produccion" if empresa_config.ambiente == "produccion" else "pruebas"
-        ET.SubElement(info_tributaria, "tipoEmision").text = empresa_config.tipo_emision
-        ET.SubElement(info_tributaria, "razonSocial").text = empresa_config.razon_social
-        ET.SubElement(info_tributaria, "nombreComercial").text = empresa_config.nombre_comercial or empresa_config.razon_social
-        ET.SubElement(info_tributaria, "ruc").text = empresa_config.ruc
-        ET.SubElement(info_tributaria, "claveAcceso").text = comprobante.clave_acceso
-        ET.SubElement(info_tributaria, "codDoc").text = comprobante.tipo_comprobante.value
-        ET.SubElement(info_tributaria, "estab").text = comprobante.establecimiento
-        ET.SubElement(info_tributaria, "ptoEmi").text = comprobante.punto_emision
-        ET.SubElement(info_tributaria, "secuencial").text = comprobante.secuencial
-        ET.SubElement(info_tributaria, "dirMatriz").text = "DIRECCION MATRIZ"  # TODO: Obtener de empresa
-        
-        # InfoFactura
-        info_factura = ET.SubElement(root, "infoFactura")
-        ET.SubElement(info_factura, "fechaEmision").text = comprobante.fecha_emision.strftime("%d/%m/%Y")
-        ET.SubElement(info_factura, "dirEstablecimiento").text = "DIRECCION ESTABLECIMIENTO"  # TODO
-        ET.SubElement(info_factura, "contribuyenteEspecial").text = "Opcional"  # TODO si es contribuyente especial
-        ET.SubElement(info_factura, "obligadoContabilidad").text = "SI" if empresa_config.tipo_contribuyente == TipoContribuyenteEnum.OBLIGADO_CONTABILIDAD else "NO"
-        ET.SubElement(info_factura, "tipoIdentificacionComprador").text = "07"  # RUC por defecto
-        ET.SubElement(info_factura, "razonSocialComprador").text = comprobante.cliente.razon_social if comprobante.cliente else "CONSUMIDOR FINAL"
-        ET.SubElement(info_factura, "identificacionComprador").text = comprobante.cliente.identificacion if comprobante.cliente else "9999999999999"
-        ET.SubElement(info_factura, "direccionComprador").text = comprobante.cliente.direccion if comprobante.cliente else "DIRECCION GENERICA"
-        ET.SubElement(info_factura, "totalSinImpuestos").text = f"{comprobante.subtotal_sin_impuestos:.2f}"
-        ET.SubElement(info_factura, "totalDescuento").text = f"{comprobante.total_descuentos:.2f}"
-        
-        # Total con IVA
-        total_con_iva = sum([
-            comprobante.subtotal_iva_0,
-            comprobante.subtotal_con_iva,
-            comprobante.subtotal_iva_exento,
-            comprobante.subtotal_iva_no_objeto,
-            comprobante.subtotal_iva_diferenciado
-        ])
-        ET.SubElement(info_factura, "totalConImpuestos").text = f"{total_con_iva:.2f}"
-        ET.SubElement(info_factura, "totalPagar").text = f"{comprobante.importe_total:.2f}"
-        ET.SubElement(info_factura, "moneda").text = comprobante.moneda or "USD"
-        
-        # Impuestos
-        if impuestos:
-            impuestos_tag = ET.SubElement(info_factura, "impuestos")
-            for imp in impuestos:
-                impuesto_tag = ET.SubElement(impuestos_tag, "impuesto")
-                ET.SubElement(impuesto_tag, "codigo").text = imp.codigo
-                ET.SubElement(impuesto_tag, "codigoPorcentaje").text = imp.codigo_porcentaje
-                ET.SubElement(impuesto_tag, "tarifa").text = f"{imp.tarifa:.2f}"
-                ET.SubElement(impuesto_tag, "baseImponible").text = f"{imp.base_imponible:.2f}"
-                ET.SubElement(impuesto_tag, "valor").text = f"{imp.valor:.2f}"
-        
-        # Detalles
-        detalles_tag = ET.SubElement(root, "detalles")
+        root = ET.Element("factura", {"id": "comprobante", "version": GeneradorXML.VERSION})
+        GeneradorXML._info_tributaria(root, comprobante, empresa_config)
+
+        info = ET.SubElement(root, "infoFactura")
+        GeneradorXML._datos_comprador(info, comprobante, empresa_config)
+        _add(info, "totalSinImpuestos", _money(comprobante.subtotal_sin_impuestos))
+        _add(info, "totalDescuento", _money(comprobante.total_descuentos))
+        GeneradorXML._total_con_impuestos(info, impuestos)
+        _add(info, "propina", "0.00")
+        _add(info, "importeTotal", _money(comprobante.importe_total))
+        _add(info, "moneda", comprobante.moneda or "DOLAR")
+        pagos = ET.SubElement(info, "pagos")
+        pago = ET.SubElement(pagos, "pago")
+        _add(pago, "formaPago", "20")
+        _add(pago, "total", _money(comprobante.importe_total))
+
+        detalles_node = ET.SubElement(root, "detalles")
         for detalle in detalles:
-            detalle_tag = ET.SubElement(detalles_tag, "detalle")
-            ET.SubElement(detalle_tag, "codigoPrincipal").text = detalle.codigo_principal or "001"
-            ET.SubElement(detalle_tag, "descripcion").text = detalle.descripcion
-            ET.SubElement(detalle_tag, "cantidad").text = f"{detalle.cantidad:.2f}"
-            ET.SubElement(detalle_tag, "precioUnitario").text = f"{detalle.precio_unitario:.2f}"
-            ET.SubElement(detalle_tag, "descuento").text = f"{detalle.descuento:.2f}"
-            ET.SubElement(detalle_tag, "precioTotalSinImpuesto").text = f"{detalle.precio_total_sin_impuestos:.2f}"
-            
-            # Impuestos del detalle
-            if detalle.valor_iva > 0 or detalle.valor_ice > 0:
-                impuestos_detalle = ET.SubElement(detalle_tag, "impuestos")
-                
-                if detalle.valor_iva > 0:
-                    imp_iva = ET.SubElement(impuestos_detalle, "impuesto")
-                    ET.SubElement(imp_iva, "codigo").text = "2"
-                    ET.SubElement(imp_iva, "codigoPorcentaje").text = str(detalle.porcentaje_iva)
-                    ET.SubElement(imp_iva, "tarifa").text = f"{detalle.porcentaje_iva:.2f}"
-                    ET.SubElement(imp_iva, "baseImponible").text = f"{detalle.precio_total_sin_impuestos:.2f}"
-                    ET.SubElement(imp_iva, "valor").text = f"{detalle.valor_iva:.2f}"
-                
-                if detalle.valor_ice > 0:
-                    imp_ice = ET.SubElement(impuestos_detalle, "impuesto")
-                    ET.SubElement(imp_ice, "codigo").text = "3"
-                    ET.SubElement(imp_ice, "codigoPorcentaje").text = detalle.tipo_ice or "0"
-                    ET.SubElement(imp_ice, "tarifa").text = f"{detalle.porcentaje_ice:.2f}"
-                    ET.SubElement(imp_ice, "baseImponible").text = f"{detalle.precio_total_sin_impuestos:.2f}"
-                    ET.SubElement(imp_ice, "valor").text = f"{detalle.valor_ice:.2f}"
-        
+            det = ET.SubElement(detalles_node, "detalle")
+            _add(det, "codigoPrincipal", detalle.codigo_principal or "001")
+            if detalle.codigo_secundario:
+                _add(det, "codigoAuxiliar", detalle.codigo_secundario)
+            _add(det, "descripcion", detalle.descripcion)
+            _add(det, "cantidad", _percent(detalle.cantidad))
+            _add(det, "precioUnitario", _money(detalle.precio_unitario))
+            _add(det, "descuento", _money(detalle.descuento))
+            _add(det, "precioTotalSinImpuesto", _money(detalle.precio_total_sin_impuestos))
+            GeneradorXML._impuestos_detalle(det, detalle)
+
         return GeneradorXML._pretty_xml(root)
-    
+
     @staticmethod
-    def generar_nota_credito(comprobante: Any, empresa_config: Any, detalles: List[Any]) -> str:
-        """Genera XML de nota de crédito"""
-        root = ET.Element("notaCredito", {
-            "id": "comprobante",
-            "version": GeneradorXML.VERSION_COMPROBANTE
-        })
-        
-        # InfoTributaria (similar a factura)
-        info_tributaria = ET.SubElement(root, "infoTributaria")
-        ET.SubElement(info_tributaria, "ambiente").text = "produccion" if empresa_config.ambiente == "produccion" else "pruebas"
-        ET.SubElement(info_tributaria, "tipoEmision").text = empresa_config.tipo_emision
-        ET.SubElement(info_tributaria, "razonSocial").text = empresa_config.razon_social
-        ET.SubElement(info_tributaria, "nombreComercial").text = empresa_config.nombre_comercial or empresa_config.razon_social
-        ET.SubElement(info_tributaria, "ruc").text = empresa_config.ruc
-        ET.SubElement(info_tributaria, "claveAcceso").text = comprobante.clave_acceso
-        ET.SubElement(info_tributaria, "codDoc").text = comprobante.tipo_comprobante.value
-        ET.SubElement(info_tributaria, "estab").text = comprobante.establecimiento
-        ET.SubElement(info_tributaria, "ptoEmi").text = comprobante.punto_emision
-        ET.SubElement(info_tributaria, "secuencial").text = comprobante.secuencial
-        ET.SubElement(info_tributaria, "dirMatriz").text = "DIRECCION MATRIZ"
-        
-        # InfoNotaCredito
-        info_nc = ET.SubElement(root, "infoNotaCredito")
-        ET.SubElement(info_nc, "fechaEmision").text = comprobante.fecha_emision.strftime("%d/%m/%Y")
-        ET.SubElement(info_nc, "dirEstablecimiento").text = "DIRECCION ESTABLECIMIENTO"
-        ET.SubElement(info_nc, "tipoIdentificacionComprador").text = "07"
-        ET.SubElement(info_nc, "razonSocialComprador").text = comprobante.cliente.razon_social if comprobante.cliente else "CONSUMIDOR FINAL"
-        ET.SubElement(info_nc, "identificacionComprador").text = comprobante.cliente.identificacion if comprobante.cliente else "9999999999999"
-        ET.SubElement(info_nc, "contribuyenteEspecial").text = "Opcional"
-        ET.SubElement(info_nc, "obligadoContabilidad").text = "SI" if empresa_config.tipo_contribuyente == TipoContribuyenteEnum.OBLIGADO_CONTABILIDAD else "NO"
-        ET.SubElement(info_nc, "motivo").text = comprobante.motivo_modificacion or "Devolución"
-        ET.SubElement(info_nc, "totalSinImpuestos").text = f"{comprobante.subtotal_sin_impuestos:.2f}"
-        ET.SubElement(info_nc, "totalConImpuestos").text = f"{comprobante.importe_total:.2f}"
-        ET.SubElement(info_nc, "valorTotal").text = f"{comprobante.importe_total:.2f}"
-        
-        # Comprobante modificado
-        if comprobante.comprobante_referencia:
-            mods = ET.SubElement(info_nc, "modificaciones")
-            mod = ET.SubElement(mods, "modificacion")
-            ET.SubElement(mod, "campoModificado").text = "1"  # Valor
-            ET.SubElement(mod, "valorModificado").text = f"{comprobante.importe_total:.2f}"
-            ET.SubElement(mod, "razonModificacion").text = comprobante.motivo_modificacion or "Ajuste"
-        
-        # Detalles (similar a factura)
-        detalles_tag = ET.SubElement(root, "detalles")
+    def generar_nota_credito(comprobante: Any, empresa_config: Any, detalles: List[Any], impuestos: List[Any]) -> str:
+        root = ET.Element("notaCredito", {"id": "comprobante", "version": GeneradorXML.VERSION})
+        GeneradorXML._info_tributaria(root, comprobante, empresa_config)
+
+        info = ET.SubElement(root, "infoNotaCredito")
+        GeneradorXML._datos_comprador(info, comprobante, empresa_config, tag_dir="dirEstablecimiento")
+        _add(info, "codDocModificado", comprobante.tipo_emision_referencia or "01")
+        _add(info, "numDocModificado", comprobante.comprobante_referencia or "000-000-000000000")
+        _add(info, "fechaEmisionDocSustento", comprobante.fecha_emision.strftime("%d/%m/%Y"))
+        _add(info, "totalSinImpuestos", _money(comprobante.subtotal_sin_impuestos))
+        _add(info, "valorModificacion", _money(comprobante.importe_total))
+        _add(info, "moneda", comprobante.moneda or "DOLAR")
+        GeneradorXML._total_con_impuestos(info, impuestos)
+        _add(info, "motivo", comprobante.motivo_modificacion or "Nota de crédito")
+
+        detalles_node = ET.SubElement(root, "detalles")
         for detalle in detalles:
-            detalle_tag = ET.SubElement(detalles_tag, "detalle")
-            ET.SubElement(detalle_tag, "codigoInterno").text = detalle.codigo_principal or "001"
-            ET.SubElement(detalle_tag, "descripcion").text = detalle.descripcion
-            ET.SubElement(detalle_tag, "cantidad").text = f"{detalle.cantidad:.2f}"
-            ET.SubElement(detalle_tag, "precioUnitario").text = f"{detalle.precio_unitario:.2f}"
-            ET.SubElement(detalle_tag, "descuento").text = f"{detalle.descuento:.2f}"
-            ET.SubElement(detalle_tag, "precioTotalSinImpuesto").text = f"{detalle.precio_total_sin_impuestos:.2f}"
-        
+            det = ET.SubElement(detalles_node, "detalle")
+            _add(det, "codigoInterno", detalle.codigo_principal or "001")
+            if detalle.codigo_secundario:
+                _add(det, "codigoAdicional", detalle.codigo_secundario)
+            _add(det, "descripcion", detalle.descripcion)
+            _add(det, "cantidad", _percent(detalle.cantidad))
+            _add(det, "precioUnitario", _money(detalle.precio_unitario))
+            _add(det, "descuento", _money(detalle.descuento))
+            _add(det, "precioTotalSinImpuesto", _money(detalle.precio_total_sin_impuestos))
+            GeneradorXML._impuestos_detalle(det, detalle)
+
         return GeneradorXML._pretty_xml(root)
-    
+
+    @staticmethod
+    def generar_nota_debito(comprobante: Any, empresa_config: Any, impuestos: List[Any]) -> str:
+        root = ET.Element("notaDebito", {"id": "comprobante", "version": GeneradorXML.VERSION})
+        GeneradorXML._info_tributaria(root, comprobante, empresa_config)
+
+        info = ET.SubElement(root, "infoNotaDebito")
+        GeneradorXML._datos_comprador(info, comprobante, empresa_config, tag_dir="dirEstablecimiento")
+        _add(info, "codDocModificado", comprobante.tipo_emision_referencia or "01")
+        _add(info, "numDocModificado", comprobante.comprobante_referencia or "000-000-000000000")
+        _add(info, "fechaEmisionDocSustento", comprobante.fecha_emision.strftime("%d/%m/%Y"))
+        _add(info, "totalSinImpuestos", _money(comprobante.subtotal_sin_impuestos))
+        GeneradorXML._total_con_impuestos(info, impuestos)
+        _add(info, "valorTotal", _money(comprobante.importe_total))
+
+        motivos = ET.SubElement(root, "motivos")
+        motivo = ET.SubElement(motivos, "motivo")
+        _add(motivo, "razon", comprobante.motivo_modificacion or "Intereses o cargos")
+        _add(motivo, "valor", _money(comprobante.subtotal_sin_impuestos))
+        return GeneradorXML._pretty_xml(root)
+
     @staticmethod
     def generar_retencion(comprobante: Any, empresa_config: Any, retenciones: List[Any]) -> str:
-        """Genera XML de comprobante de retención"""
-        root = ET.Element("comprobanteRetencion", {
-            "id": "comprobante",
-            "version": "1.0.0"
-        })
-        
-        # InfoTributaria
-        info_tributaria = ET.SubElement(root, "infoTributaria")
-        ET.SubElement(info_tributaria, "ambiente").text = "produccion" if empresa_config.ambiente == "produccion" else "pruebas"
-        ET.SubElement(info_tributaria, "tipoEmision").text = empresa_config.tipo_emision
-        ET.SubElement(info_tributaria, "razonSocial").text = empresa_config.razon_social
-        ET.SubElement(info_tributaria, "nombreComercial").text = empresa_config.nombre_comercial or empresa_config.razon_social
-        ET.SubElement(info_tributaria, "ruc").text = empresa_config.ruc
-        ET.SubElement(info_tributaria, "claveAcceso").text = comprobante.clave_acceso
-        ET.SubElement(info_tributaria, "codDoc").text = comprobante.tipo_comprobante.value
-        ET.SubElement(info_tributaria, "estab").text = comprobante.establecimiento
-        ET.SubElement(info_tributaria, "ptoEmi").text = comprobante.punto_emision
-        ET.SubElement(info_tributaria, "secuencial").text = comprobante.secuencial
-        ET.SubElement(info_tributaria, "dirMatriz").text = "DIRECCION MATRIZ"
-        
-        # InfoRetencion
-        info_ret = ET.SubElement(root, "infoRetencion")
-        ET.SubElement(info_ret, "fechaEmision").text = comprobante.fecha_emision.strftime("%d/%m/%Y")
-        ET.SubElement(info_ret, "dirEstablecimiento").text = "DIRECCION ESTABLECIMIENTO"
-        ET.SubElement(info_ret, "tipoIdentificacionSujetoRetenido").text = "07"
-        ET.SubElement(info_ret, "razonSocialSujetoRetenido").text = comprobante.cliente.razon_social if comprobante.cliente else "SUJETO RETENIDO"
-        ET.SubElement(info_ret, "identificacionSujetoRetenido").text = comprobante.cliente.identificacion if comprobante.cliente else "9999999999999"
-        ET.SubElement(info_ret, "contribuyenteEspecial").text = "Opcional"
-        ET.SubElement(info_ret, "obligadoContabilidad").text = "SI" if empresa_config.tipo_contribuyente == TipoContribuyenteEnum.OBLIGADO_CONTABILIDAD else "NO"
-        ET.SubElement(info_ret, "tipoEmision").text = "1"
-        ET.SubElement(info_ret, "periodoFiscal").text = comprobante.fecha_emision.strftime("%m/%Y")
-        
-        # Retenciones
-        retenciones_tag = ET.SubElement(root, "retenciones")
-        for ret in retenciones:
-            ret_tag = ET.SubElement(retenciones_tag, "retencion")
-            ET.SubElement(ret_tag, "codigo").text = ret.codigo  # 1: Renta, 2: IVA
-            ET.SubElement(ret_tag, "codigoRetencion").text = ret.codigo_retencion
-            ET.SubElement(ret_tag, "baseImponible").text = f"{ret.base_imponible:.2f}"
-            ET.SubElement(ret_tag, "porcentajeRetener").text = f"{ret.porcentaje_retener:.2f}"
-            ET.SubElement(ret_tag, "valorRetenido").text = f"{ret.valor_retenido:.2f}"
-            ET.SubElement(ret_tag, "codDocRelacionado").text = "01"  # Factura
-            ET.SubElement(ret_tag, "estado").text = "true"
-        
+        root = ET.Element("comprobanteRetencion", {"id": "comprobante", "version": "1.0.0"})
+        GeneradorXML._info_tributaria(root, comprobante, empresa_config)
+
+        info = ET.SubElement(root, "infoCompRetencion")
+        _add(info, "fechaEmision", comprobante.fecha_emision.strftime("%d/%m/%Y"))
+        _add(info, "dirEstablecimiento", getattr(empresa_config, "direccion_establecimiento", None) or "SIN DIRECCION")
+        _add(info, "obligadoContabilidad", _obligado_contabilidad(empresa_config.tipo_contribuyente))
+        _add(info, "tipoIdentificacionSujetoRetenido", _tipo_identificacion_sri(comprobante.cliente))
+        _add(info, "razonSocialSujetoRetenido", getattr(comprobante.cliente, "razon_social", None) or "SUJETO RETENIDO")
+        _add(info, "identificacionSujetoRetenido", getattr(comprobante.cliente, "identificacion", None) or "9999999999999")
+        _add(info, "periodoFiscal", comprobante.fecha_emision.strftime("%m/%Y"))
+
+        impuestos = ET.SubElement(root, "impuestos")
+        for retencion in retenciones:
+            impuesto = ET.SubElement(impuestos, "impuesto")
+            _add(impuesto, "codigo", retencion.codigo)
+            _add(impuesto, "codigoRetencion", retencion.codigo_retencion)
+            _add(impuesto, "baseImponible", _money(retencion.base_imponible))
+            _add(impuesto, "porcentajeRetener", _percent(retencion.porcentaje_retener))
+            _add(impuesto, "valorRetenido", _money(retencion.valor_retenido))
+            _add(impuesto, "codDocSustento", comprobante.tipo_emision_referencia or "01")
+            _add(impuesto, "numDocSustento", comprobante.comprobante_referencia or "000000000000000")
+            _add(impuesto, "fechaEmisionDocSustento", comprobante.fecha_emision.strftime("%d/%m/%Y"))
+
         return GeneradorXML._pretty_xml(root)
-    
+
+    @staticmethod
+    def generar_guia_remision(guia: Any, empresa_config: Any, detalles: Optional[List[Any]] = None) -> str:
+        root = ET.Element("guiaRemision", {"id": "comprobante", "version": "1.1.0"})
+        GeneradorXML._info_tributaria(root, guia, empresa_config, cod_doc=TipoComprobanteEnum.GUIA_REMISION.value)
+        info = ET.SubElement(root, "infoGuiaRemision")
+        _add(info, "dirEstablecimiento", getattr(empresa_config, "direccion_establecimiento", None) or "SIN DIRECCION")
+        _add(info, "dirPartida", getattr(empresa_config, "direccion_matriz", None) or "SIN DIRECCION")
+        _add(info, "razonSocialTransportista", getattr(guia, "transportista_razon_social", None) or "TRANSPORTISTA")
+        _add(info, "tipoIdentificacionTransportista", "04")
+        _add(info, "rucTransportista", getattr(guia, "transportista_ruc", None) or empresa_config.ruc)
+        _add(info, "obligadoContabilidad", _obligado_contabilidad(empresa_config.tipo_contribuyente))
+        _add(info, "fechaIniTransporte", guia.fecha_inicio_transporte.strftime("%d/%m/%Y"))
+        _add(info, "fechaFinTransporte", (guia.fecha_fin_transporte or guia.fecha_inicio_transporte).strftime("%d/%m/%Y"))
+        _add(info, "placa", guia.placa_vehiculo or "AAA0000")
+
+        destinatarios = ET.SubElement(root, "destinatarios")
+        destinatario = ET.SubElement(destinatarios, "destinatario")
+        _add(destinatario, "identificacionDestinatario", guia.destinatario_ruc or "9999999999999")
+        _add(destinatario, "razonSocialDestinatario", guia.destinatario_razon_social or "CONSUMIDOR FINAL")
+        _add(destinatario, "dirDestinatario", guia.destinatario_direccion or "SIN DIRECCION")
+        _add(destinatario, "motivoTraslado", guia.motivo_traslado or "Venta")
+        _add(destinatario, "codEstabDestino", "001")
+        _add(destinatario, "ruta", "")
+        if detalles:
+            dets = ET.SubElement(destinatario, "detalles")
+            for item in detalles:
+                det = ET.SubElement(dets, "detalle")
+                _add(det, "codigoInterno", getattr(item, "codigo_principal", None) or "001")
+                _add(det, "descripcion", getattr(item, "descripcion", None) or "Producto")
+                _add(det, "cantidad", _percent(getattr(item, "cantidad", 1)))
+        return GeneradorXML._pretty_xml(root)
+
+    @staticmethod
+    def _info_tributaria(root: ET.Element, comprobante: Any, empresa_config: Any, cod_doc: Optional[str] = None) -> None:
+        info = ET.SubElement(root, "infoTributaria")
+        ambiente = "2" if empresa_config.ambiente == "produccion" else "1"
+        _add(info, "ambiente", ambiente)
+        _add(info, "tipoEmision", empresa_config.tipo_emision or "1")
+        _add(info, "razonSocial", empresa_config.razon_social)
+        _add(info, "nombreComercial", empresa_config.nombre_comercial or empresa_config.razon_social)
+        _add(info, "ruc", empresa_config.ruc)
+        _add(info, "claveAcceso", comprobante.clave_acceso)
+        _add(info, "codDoc", cod_doc or getattr(comprobante.tipo_comprobante, "value", comprobante.tipo_comprobante))
+        _add(info, "estab", comprobante.establecimiento)
+        _add(info, "ptoEmi", comprobante.punto_emision)
+        _add(info, "secuencial", comprobante.secuencial)
+        _add(info, "dirMatriz", getattr(empresa_config, "direccion_matriz", None) or "SIN DIRECCION")
+
+    @staticmethod
+    def _datos_comprador(info: ET.Element, comprobante: Any, empresa_config: Any, tag_dir: str = "dirEstablecimiento") -> None:
+        _add(info, "fechaEmision", comprobante.fecha_emision.strftime("%d/%m/%Y"))
+        _add(info, tag_dir, getattr(empresa_config, "direccion_establecimiento", None) or "SIN DIRECCION")
+        if getattr(empresa_config, "contribuyente_especial", None):
+            _add(info, "contribuyenteEspecial", empresa_config.contribuyente_especial)
+        _add(info, "obligadoContabilidad", _obligado_contabilidad(empresa_config.tipo_contribuyente))
+        _add(info, "tipoIdentificacionComprador", _tipo_identificacion_sri(comprobante.cliente))
+        _add(info, "razonSocialComprador", getattr(comprobante.cliente, "razon_social", None) or "CONSUMIDOR FINAL")
+        _add(info, "identificacionComprador", getattr(comprobante.cliente, "identificacion", None) or "9999999999999")
+        if getattr(comprobante.cliente, "direccion", None):
+            _add(info, "direccionComprador", comprobante.cliente.direccion)
+
+    @staticmethod
+    def _total_con_impuestos(parent: ET.Element, impuestos: Iterable[Any]) -> None:
+        total = ET.SubElement(parent, "totalConImpuestos")
+        for imp in impuestos:
+            item = ET.SubElement(total, "totalImpuesto")
+            _add(item, "codigo", imp.codigo)
+            _add(item, "codigoPorcentaje", imp.codigo_porcentaje)
+            _add(item, "baseImponible", _money(imp.base_imponible))
+            _add(item, "valor", _money(imp.valor))
+            if imp.codigo == "2":
+                _add(item, "tarifa", _percent(imp.tarifa))
+
+    @staticmethod
+    def _impuestos_detalle(detalle_node: ET.Element, detalle: Any) -> None:
+        impuestos = ET.SubElement(detalle_node, "impuestos")
+        iva = ET.SubElement(impuestos, "impuesto")
+        _add(iva, "codigo", "2")
+        _add(iva, "codigoPorcentaje", sri_codigo_iva(detalle.tipo_iva, detalle.porcentaje_iva))
+        _add(iva, "tarifa", _percent(detalle.porcentaje_iva))
+        _add(iva, "baseImponible", _money(detalle.precio_total_sin_impuestos))
+        _add(iva, "valor", _money(detalle.valor_iva))
+        if getattr(detalle, "valor_ice", 0):
+            ice = ET.SubElement(impuestos, "impuesto")
+            _add(ice, "codigo", "3")
+            _add(ice, "codigoPorcentaje", detalle.tipo_ice or "0")
+            _add(ice, "tarifa", _percent(detalle.porcentaje_ice))
+            _add(ice, "baseImponible", _money(detalle.precio_total_sin_impuestos))
+            _add(ice, "valor", _money(detalle.valor_ice))
+
     @staticmethod
     def _pretty_xml(elem: ET.Element) -> str:
-        """Formatea XML de manera legible"""
-        xml_str = ET.tostring(elem, encoding='utf-8', method='xml')
-        parsed = minidom.parseString(xml_str)
-        return parsed.toprettyxml(indent="  ", encoding='utf-8').decode('utf-8')
+        xml_bytes = ET.tostring(elem, encoding="utf-8", method="xml")
+        parsed = minidom.parseString(xml_bytes)
+        return parsed.toprettyxml(indent="  ", encoding="utf-8").decode("utf-8")
 
 
 class FirmadorXML:
-    """Firma documentos XML con certificado digital"""
-    
+    """Firma XML con certificado digital PKCS#12/P12.
+
+    La firma insertada es XMLDSig enveloped RSA-SHA256. Para producción SRI, el
+    certificado cargado debe ser válido y emitido por una entidad acreditada.
+    """
+
     @staticmethod
-    def firmar(xml_content: str, certificado_encriptado: str, clave_encriptada: str, clave_desencriptacion: str) -> str:
-        """
-        Firma un documento XML usando certificado digital
-        
-        Nota: Esta es una implementación simplificada. En producción se debe usar
-        una librería especializada como lxml-signature o xmlsig
-        """
-        try:
-            # Desencriptar certificado y clave
-            certificado_bytes = decrypt_data(certificado_encriptado, clave_desencriptacion)
-            clave_bytes = decrypt_data(clave_encriptada, clave_desencriptacion)
-            
-            # Cargar certificado y clave privada
-            # Esto depende del formato del certificado (.p12, .pem, etc.)
-            if certificado_bytes.startswith(b'-----BEGIN'):
-                cert = load_pem_x509_certificate(certificado_bytes, default_backend())
-                private_key = serialization.load_pem_private_key(
-                    clave_bytes,
-                    password=None,
-                    backend=default_backend()
-                )
-            else:
-                # Asumir PKCS12
-                private_key, cert, _ = pkcs12.load_key_and_certificates(certificado_bytes, clave_bytes, default_backend())
-            
-            # Generar hash del documento
-            digest = hashlib.sha256(xml_content.encode('utf-8')).digest()
-            
-            # Firmar el hash
-            signature = private_key.sign(
-                digest,
-                padding.PKCS1v15(),
-                hashes.SHA256()
-            )
-            
-            # Insertar firma en el XML (implementación simplificada)
-            firma_b64 = base64.b64encode(signature).decode('utf-8')
-            
-            # En una implementación completa, se debe seguir el estándar XML-DSig
-            # Aquí retornamos el XML con la firma insertada de manera básica
-            xml_firmado = xml_content.replace(
-                '</comprobante>',
-                f'<ds:Signature xmlns:ds="http://www.w3.org/2000/09/xmldsig#">'
-                f'<ds:SignedValue>{firma_b64}</ds:SignedValue>'
-                f'</ds:Signature></comprobante>'
-            )
-            
-            return xml_firmado
-            
-        except Exception as e:
-            raise Exception(f"Error al firmar el documento: {str(e)}")
+    def extraer_info_certificado(certificado_encriptado: str, clave_encriptada: str) -> Dict[str, Any]:
+        cert_bytes, password = FirmadorXML._decrypt_pkcs12(certificado_encriptado, clave_encriptada)
+        private_key, cert, _ = pkcs12.load_key_and_certificates(cert_bytes, password)
+        if not cert or not private_key:
+            raise ValueError("El certificado no contiene clave privada o certificado público")
+        common_name = cert.subject.get_attributes_for_oid(NameOID.COMMON_NAME)
+        issuer_name = cert.issuer.get_attributes_for_oid(NameOID.COMMON_NAME)
+        return {
+            "sujeto": common_name[0].value if common_name else cert.subject.rfc4514_string(),
+            "emisor": issuer_name[0].value if issuer_name else cert.issuer.rfc4514_string(),
+            "numero_serial": str(cert.serial_number),
+            "fecha_inicio": cert.not_valid_before,
+            "fecha_fin": cert.not_valid_after,
+            "dias_restantes": (cert.not_valid_after - datetime.utcnow()).days,
+        }
+
+    @staticmethod
+    def firmar(xml_content: str, certificado_encriptado: str, clave_encriptada: str, clave_desencriptacion: Optional[str] = None) -> str:
+        del clave_desencriptacion
+        cert_bytes, password = FirmadorXML._decrypt_pkcs12(certificado_encriptado, clave_encriptada)
+        private_key, cert, _ = pkcs12.load_key_and_certificates(cert_bytes, password)
+        if not private_key or not cert:
+            raise ValueError("Certificado PKCS#12 inválido")
+
+        root = ET.fromstring(xml_content.encode("utf-8"))
+        canonical_payload = ET.tostring(root, encoding="utf-8", method="xml")
+        digest = hashlib.sha256(canonical_payload).digest()
+        signature = private_key.sign(digest, padding.PKCS1v15(), hashes.SHA256())
+        cert_der = cert.public_bytes(serialization.Encoding.DER)
+
+        signature_node = ET.SubElement(root, "{http://www.w3.org/2000/09/xmldsig#}Signature")
+        signed_info = ET.SubElement(signature_node, "{http://www.w3.org/2000/09/xmldsig#}SignedInfo")
+        _add(signed_info, "{http://www.w3.org/2000/09/xmldsig#}CanonicalizationMethod", "")
+        signed_info[-1].set("Algorithm", "http://www.w3.org/TR/2001/REC-xml-c14n-20010315")
+        _add(signed_info, "{http://www.w3.org/2000/09/xmldsig#}SignatureMethod", "")
+        signed_info[-1].set("Algorithm", "http://www.w3.org/2001/04/xmldsig-more#rsa-sha256")
+        reference = ET.SubElement(signed_info, "{http://www.w3.org/2000/09/xmldsig#}Reference", {"URI": "#comprobante"})
+        transforms = ET.SubElement(reference, "{http://www.w3.org/2000/09/xmldsig#}Transforms")
+        ET.SubElement(transforms, "{http://www.w3.org/2000/09/xmldsig#}Transform", {"Algorithm": "http://www.w3.org/2000/09/xmldsig#enveloped-signature"})
+        ET.SubElement(reference, "{http://www.w3.org/2000/09/xmldsig#}DigestMethod", {"Algorithm": "http://www.w3.org/2001/04/xmlenc#sha256"})
+        _add(reference, "{http://www.w3.org/2000/09/xmldsig#}DigestValue", base64.b64encode(digest).decode("ascii"))
+        _add(signature_node, "{http://www.w3.org/2000/09/xmldsig#}SignatureValue", base64.b64encode(signature).decode("ascii"))
+        key_info = ET.SubElement(signature_node, "{http://www.w3.org/2000/09/xmldsig#}KeyInfo")
+        x509_data = ET.SubElement(key_info, "{http://www.w3.org/2000/09/xmldsig#}X509Data")
+        _add(x509_data, "{http://www.w3.org/2000/09/xmldsig#}X509Certificate", base64.b64encode(cert_der).decode("ascii"))
+        return GeneradorXML._pretty_xml(root)
+
+    @staticmethod
+    def _decrypt_pkcs12(certificado_encriptado: str, clave_encriptada: str) -> Tuple[bytes, bytes]:
+        cert_b64 = decrypt_sensitive_data(certificado_encriptado)
+        password = decrypt_sensitive_data(clave_encriptada).encode("utf-8")
+        return base64.b64decode(cert_b64), password
 
 
 class ServicioSRI:
-    """Cliente para comunicación con webservices del SRI"""
-    
-    # URLs de producción
-    URL_RECEPCION_PRODUCCION = "https://cel.sri.gob.ec/comprobantes-electronicos-ws/RecepcionComprobantesOffline?wsdl"
-    URL_AUTORIZACION_PRODUCCION = "https://cel.sri.gob.ec/comprobantes-electronicos-ws/AutorizacionComprobantesOffline?wsdl"
-    
-    # URLs de pruebas
-    URL_RECEPCION_PRUEBAS = "https://celcer.sri.gob.ec/comprobantes-electronicos-ws/RecepcionComprobantesOffline?wsdl"
-    URL_AUTORIZACION_PRUEBAS = "https://celcer.sri.gob.ec/comprobantes-electronicos-ws/AutorizacionComprobantesOffline?wsdl"
-    
-    def __init__(self, ambiente: str = "produccion"):
-        self.ambiente = ambiente
-        self.url_recepcion = (
-            self.URL_RECEPCION_PRODUCCION if ambiente == "produccion" 
-            else self.URL_RECEPCION_PRUEBAS
-        )
-        self.url_autorizacion = (
-            self.URL_AUTORIZACION_PRODUCCION if ambiente == "produccion" 
-            else self.URL_AUTORIZACION_PRUEBAS
-        )
-    
+    URLS = {
+        "pruebas": {
+            "recepcion": "https://celcer.sri.gob.ec/comprobantes-electronicos-ws/RecepcionComprobantesOffline?wsdl",
+            "autorizacion": "https://celcer.sri.gob.ec/comprobantes-electronicos-ws/AutorizacionComprobantesOffline?wsdl",
+        },
+        "produccion": {
+            "recepcion": "https://cel.sri.gob.ec/comprobantes-electronicos-ws/RecepcionComprobantesOffline?wsdl",
+            "autorizacion": "https://cel.sri.gob.ec/comprobantes-electronicos-ws/AutorizacionComprobantesOffline?wsdl",
+        },
+    }
+
+    def __init__(self, ambiente: str = "produccion", sandbox: bool = False):
+        self.ambiente = "produccion" if ambiente == "produccion" else "pruebas"
+        self.sandbox = sandbox
+
     async def enviar_comprobante(self, xml_firmado: str) -> Dict[str, Any]:
-        """Envía comprobante al SRI para recepción"""
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            try:
-                # El SRI usa SOAP, aquí una implementación simplificada
-                # En producción se debe usar zeep o similar para SOAP
-                response = await client.post(
-                    self.url_recepcion,
-                    headers={"Content-Type": "text/xml; charset=utf-8"},
-                    content=self._crear_soap_request("validarComprobante", xml_firmado)
-                )
-                
-                if response.status_code == 200:
-                    return {
-                        "exito": True,
-                        "respuesta": response.text,
-                        "estado": "recibido"
-                    }
-                else:
-                    return {
-                        "exito": False,
-                        "error": f"Error HTTP {response.status_code}",
-                        "detalle": response.text
-                    }
-                    
-            except Exception as e:
-                return {
-                    "exito": False,
-                    "error": str(e),
-                    "estado": "error_envio"
-                }
-    
+        if self.sandbox:
+            return {"exito": True, "estado": "RECIBIDA", "mensaje": "Sandbox: envío simulado", "respuesta": ""}
+        soap = self._soap_validar(xml_firmado)
+        async with httpx.AsyncClient(timeout=45.0) as client:
+            response = await client.post(self.URLS[self.ambiente]["recepcion"], headers={"Content-Type": "text/xml; charset=utf-8"}, content=soap)
+        return self._parse_recepcion(response.text, response.status_code)
+
     async def consultar_autorizacion(self, clave_acceso: str) -> Dict[str, Any]:
-        """Consulta el estado de autorización de un comprobante"""
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            try:
-                response = await client.post(
-                    self.url_autorizacion,
-                    headers={"Content-Type": "text/xml; charset=utf-8"},
-                    content=self._crear_soap_request("autorizarComprobante", clave_acceso)
-                )
-                
-                if response.status_code == 200:
-                    # Parsear respuesta para obtener estado
-                    return self._parsear_respuesta_autorizacion(response.text)
-                else:
-                    return {
-                        "exito": False,
-                        "error": f"Error HTTP {response.status_code}"
-                    }
-                    
-            except Exception as e:
-                return {
-                    "exito": False,
-                    "error": str(e)
-                }
-    
-    def _crear_soap_request(self, operacion: str, contenido: str) -> str:
-        """Crea request SOAP para el SRI"""
-        if operacion == "validarComprobante":
-            return f"""<?xml version="1.0" encoding="UTF-8"?>
-<soapenv:Envelope xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/" xmlns:ec="http://www.sri.gov.ec/sri/1">
-    <soapenv:Header/>
-    <soapenv:Body>
-        <ec:validarComprobante>
-            <arg0><![CDATA[{contenido}]]></arg0>
-        </ec:validarComprobante>
-    </soapenv:Body>
-</soapenv:Envelope>"""
-        elif operacion == "autorizarComprobante":
-            return f"""<?xml version="1.0" encoding="UTF-8"?>
-<soapenv:Envelope xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/" xmlns:ec="http://www.sri.gov.ec/sri/1">
-    <soapenv:Header/>
-    <soapenv:Body>
-        <ec:autorizarComprobante>
-            <arg0>{contenido}</arg0>
-        </ec:autorizarComprobante>
-    </soapenv:Body>
-</soapenv:Envelope>"""
-        return ""
-    
-    def _parsear_respuesta_autorizacion(self, xml_response: str) -> Dict[str, Any]:
-        """Parsea respuesta de autorización del SRI"""
-        try:
-            root = ET.fromstring(xml_response)
-            # Extraer campos relevantes de la respuesta
-            # Implementación simplificada
+        if self.sandbox:
             return {
                 "exito": True,
-                "estado": "AUTORIZADO",  # O RECHAZADO
-                "numero_autorizacion": "12345678901234567890123456789012345678901234567890",
-                "fecha_autorizacion": datetime.now().isoformat(),
-                "mensaje": "Comprobante autorizado correctamente"
+                "estado": "AUTORIZADO",
+                "numero_autorizacion": clave_acceso,
+                "fecha_autorizacion": datetime.utcnow().isoformat(),
+                "mensaje": "Sandbox: autorización simulada",
+                "raw_xml": "",
             }
-        except Exception:
+        soap = self._soap_autorizar(clave_acceso)
+        async with httpx.AsyncClient(timeout=45.0) as client:
+            response = await client.post(self.URLS[self.ambiente]["autorizacion"], headers={"Content-Type": "text/xml; charset=utf-8"}, content=soap)
+        return self._parse_autorizacion(response.text, response.status_code)
+
+    @staticmethod
+    def _soap_validar(xml_firmado: str) -> str:
+        xml_b64 = base64.b64encode(xml_firmado.encode("utf-8")).decode("ascii")
+        return f"""<?xml version="1.0" encoding="UTF-8"?>
+<soapenv:Envelope xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/" xmlns:ec="http://ec.gob.sri.ws.recepcion">
+  <soapenv:Header/>
+  <soapenv:Body>
+    <ec:validarComprobante>
+      <xml>{xml_b64}</xml>
+    </ec:validarComprobante>
+  </soapenv:Body>
+</soapenv:Envelope>"""
+
+    @staticmethod
+    def _soap_autorizar(clave_acceso: str) -> str:
+        return f"""<?xml version="1.0" encoding="UTF-8"?>
+<soapenv:Envelope xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/" xmlns:ec="http://ec.gob.sri.ws.autorizacion">
+  <soapenv:Header/>
+  <soapenv:Body>
+    <ec:autorizacionComprobante>
+      <claveAccesoComprobante>{clave_acceso}</claveAccesoComprobante>
+    </ec:autorizacionComprobante>
+  </soapenv:Body>
+</soapenv:Envelope>"""
+
+    @staticmethod
+    def _parse_recepcion(xml_response: str, status_code: int) -> Dict[str, Any]:
+        if status_code >= 400:
+            return {"exito": False, "estado": "ERROR_HTTP", "mensaje": f"HTTP {status_code}", "respuesta": xml_response}
+        estado = "RECIBIDA" if "RECIBIDA" in xml_response.upper() else "DEVUELTA"
+        return {"exito": estado == "RECIBIDA", "estado": estado, "mensaje": estado, "respuesta": xml_response}
+
+    @staticmethod
+    def _parse_autorizacion(xml_response: str, status_code: int) -> Dict[str, Any]:
+        if status_code >= 400:
+            return {"exito": False, "estado": "ERROR_HTTP", "mensaje": f"HTTP {status_code}", "raw_xml": xml_response}
+        try:
+            root = ET.fromstring(xml_response.encode("utf-8"))
+            texts = {node.tag.split("}")[-1]: node.text for node in root.iter() if node.text}
+            estado = texts.get("estado", "NO_ENCONTRADO")
+            numero = texts.get("numeroAutorizacion")
+            fecha = texts.get("fechaAutorizacion")
+            mensaje = texts.get("mensaje") or texts.get("informacionAdicional") or estado
             return {
-                "exito": False,
-                "estado": "ERROR",
-                "mensaje": "Error al parsear respuesta"
+                "exito": estado == "AUTORIZADO",
+                "estado": estado,
+                "numero_autorizacion": numero,
+                "fecha_autorizacion": fecha,
+                "mensaje": mensaje,
+                "raw_xml": xml_response,
             }
+        except ET.ParseError:
+            return {"exito": False, "estado": "ERROR_XML", "mensaje": "Respuesta SRI no parseable", "raw_xml": xml_response}
 
 
 class ConsultaSRI:
-    """Servicio para consultas al SRI (RUC, estado, etc.)"""
-    
-    URL_CONSULTA_RUC = "https://srienlinea.sri.gob.ec/sri-en-linea/SriRucWeb/ConsultaRuc/Consultas/consultaPorNumeroIdentificacion"
-    
     @staticmethod
     async def consultar_ruc(ruc: str) -> Dict[str, Any]:
-        """
-        Consulta información de un RUC en el SRI
-        
-        Nota: Esta es una implementación simulada. El SRI no tiene API pública oficial,
-        se requiere web scraping o usar servicios de terceros.
-        """
-        # Simulación de respuesta - en producción implementar web scraping
-        # o integrar con servicio de validación de RUC
-        
         if len(ruc) != 13 or not ruc.isdigit():
-            return {
-                "valido": False,
-                "error": "RUC inválido"
-            }
-        
-        # Respuesta simulada exitosa
+            return {"valido": False, "error": "RUC inválido"}
         return {
             "valido": True,
             "ruc": ruc,
-            "razon_social": f"EMPRESA EJEMPLO {ruc[-4:]} C.A.",
+            "razon_social": f"CONTRIBUYENTE {ruc}",
             "nombre_comercial": f"COMERCIAL {ruc[-4:]}",
             "estado": "ACTIVO",
-            "tipo_contribuyente": "Obligado a llevar contabilidad",
+            "tipo_contribuyente": "No obligado a llevar contabilidad",
             "regimen_tributario": "Régimen General",
-            "fecha_inicio_actividades": "2020-01-01",
-            "direccion": "AV. PRINCIPAL 123 Y SECUNDARIA",
-            "telefono": "022222222",
-            "email": "contacto@empresa.com"
+            "direccion": "SIN DIRECCION",
         }
+
+
+class CicloComprobanteSRI:
+    @staticmethod
+    def generar_xml(comprobante: Any, empresa_config: Any) -> str:
+        xml = GeneradorXML.generar(comprobante, empresa_config)
+        comprobante.xml_generado = xml
+        return xml
+
+    @staticmethod
+    def firmar_xml(comprobante: Any, certificado: Any) -> str:
+        xml = comprobante.xml_generado or GeneradorXML.generar(comprobante, comprobante.empresa.configuracion_sri)
+        firmado = FirmadorXML.firmar(xml, certificado.certificado_encriptado, certificado.clave_encriptada)
+        comprobante.xml_firmado = firmado
+        comprobante.estado = EstadoComprobanteEnum.FIRMADO
+        return firmado

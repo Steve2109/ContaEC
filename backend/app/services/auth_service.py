@@ -89,9 +89,11 @@ class UserService:
         Crea un nuevo usuario
         """
         # Verificar si el email ya existe
-        existing_user = db.query(User).filter(User.email == user_data.email).first()
+        existing_user = db.query(User).filter(
+            or_(User.email == user_data.email, User.full_name == user_data.full_name)
+        ).first()
         if existing_user:
-            raise ValueError(f"El correo {user_data.email} ya está registrado")
+            raise ValueError("El correo o nombre de usuario ya está registrado")
         
         # Crear usuario
         db_user = User(
@@ -111,6 +113,18 @@ class UserService:
         config = UserConfiguration(user_id=db_user.id)
         db.add(config)
         db.commit()
+
+        if not is_admin:
+            trial_license = License(
+                user_id=db_user.id,
+                license_type=LicenseType.MENSUAL,
+                start_date=datetime.utcnow(),
+                end_date=datetime.utcnow() + timedelta(days=30),
+                is_active=True,
+                payment_reference="AUTO_TRIAL_30_DIAS"
+            )
+            db.add(trial_license)
+            db.commit()
         
         return db_user
     

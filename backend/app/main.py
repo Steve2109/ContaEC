@@ -9,12 +9,16 @@ from slowapi.util import get_remote_address
 from contextlib import asynccontextmanager
 import logging
 import os
+import time
+import asyncio
+from collections import defaultdict, deque
 
 from .core.config import settings
 from .core.database import engine, Base, get_db
 from .api import auth, admin, files
 from .routes import facturacion, inventario, pos, bi, budget, purchase, warehouse, crm, projects, integrations, ai, nomina
 from .services.auth_service import UserService, LicenseService
+from .services.backup_service import BackupService
 from .models import User, License, LicenseType
 from .models.facturacion import EmpresaConfiguracion, CertificadoDigital, Cliente, ProductoServicio, ComprobanteElectronico
 from .models.inventario import Producto, CategoriaProducto, Almacen, StockProducto, MovimientoInventario
@@ -27,6 +31,7 @@ from datetime import datetime, timedelta
 
 
 # Configurar logging
+os.makedirs(os.path.dirname(settings.LOG_FILE), exist_ok=True)
 logging.basicConfig(
     level=getattr(logging, settings.LOG_LEVEL),
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
@@ -45,6 +50,15 @@ async def lifespan(app: FastAPI):
     """
     # Startup
     logger.info("Iniciando ContaEC...")
+    for folder in [
+        settings.UPLOAD_FOLDER,
+        settings.TEMP_UPLOAD_FOLDER,
+        settings.PERMANENT_UPLOAD_FOLDER,
+        settings.EXPORT_TEMP_FOLDER,
+        settings.BACKUP_FOLDER,
+        os.path.dirname(settings.LOG_FILE),
+    ]:
+        os.makedirs(folder, exist_ok=True)
     
     # Crear tablas de base de datos
     Base.metadata.create_all(bind=engine)
@@ -78,10 +92,15 @@ async def lifespan(app: FastAPI):
             logger.info(f"Usuario administrador creado: {settings.ADMIN_EMAIL}")
     finally:
         db_session.close()
+
+    app.state.backup_task = asyncio.create_task(BackupService.run_midnight_scheduler())
     
     yield
     
     # Shutdown
+    backup_task = getattr(app.state, "backup_task", None)
+    if backup_task:
+        backup_task.cancel()
     logger.info("Cerrando ContaEC...")
 
 
@@ -104,13 +123,30 @@ app.state.limiter = limiter
 app.add_exception_handler(429, _rate_limit_exceeded_handler)
 
 # Configurar CORS
+cors_origins = [origin.strip() for origin in settings.CORS_ORIGINS.split(",") if origin.strip()]
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # En producción, especificar dominios permitidos
+    allow_origins=cors_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+_rate_buckets: dict[str, deque[float]] = defaultdict(deque)
+
+
+@app.middleware("http")
+async def rate_limit_all_requests(request: Request, call_next):
+    client_ip = request.headers.get("X-Forwarded-For", "").split(",")[0].strip()
+    client_ip = client_ip or (request.client.host if request.client else "unknown")
+    now = time.time()
+    bucket = _rate_buckets[client_ip]
+    while bucket and now - bucket[0] > 60:
+        bucket.popleft()
+    if len(bucket) >= settings.RATE_LIMIT_PER_MINUTE:
+        return JSONResponse(status_code=429, content={"detail": "Límite de peticiones excedido"})
+    bucket.append(now)
+    return await call_next(request)
 
 
 # Middleware para logging de requests
