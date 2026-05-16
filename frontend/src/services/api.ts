@@ -1,135 +1,139 @@
 import axios from 'axios';
-import type { User, Company, License, Invoice, Product, Employee } from '../types';
 
-const API_BASE_URL = '';
+const API_URL = import.meta.env.VITE_API_URL || 'http://10.0.1.20/api/v1';
 
 const api = axios.create({
-  baseURL: API_BASE_URL,
+  baseURL: API_URL,
   headers: {
     'Content-Type': 'application/json',
   },
+  timeout: 30000,
 });
 
-// Interceptor para agregar token
-api.interceptors.request.use((config) => {
-  const token = localStorage.getItem('token');
-  if (token) {
-    config.headers.Authorization = `Bearer ${token}`;
-  }
-  return config;
-});
+// Request interceptor: attach JWT token
+api.interceptors.request.use(
+  (config) => {
+    const token = localStorage.getItem('access_token');
+    if (token) {
+      config.headers.Authorization = `Bearer ${token}`;
+    }
+    return config;
+  },
+  (error) => Promise.reject(error)
+);
 
-// Interceptor para manejar errores
+// Response interceptor: handle 401 and refresh token
 api.interceptors.response.use(
   (response) => response,
-  (error) => {
-    if (error.response?.status === 401) {
-      localStorage.removeItem('token');
-      window.location.href = '/login';
+  async (error) => {
+    const originalRequest = error.config;
+    if (error.response?.status === 401 && !originalRequest._retry) {
+      originalRequest._retry = true;
+      const refreshToken = localStorage.getItem('refresh_token');
+      if (refreshToken) {
+        try {
+          const res = await axios.post(`${API_URL}/auth/refresh`, {
+            refresh_token: refreshToken,
+          });
+          localStorage.setItem('access_token', res.data.access_token);
+          originalRequest.headers.Authorization = `Bearer ${res.data.access_token}`;
+          return api(originalRequest);
+        } catch (refreshError) {
+          localStorage.removeItem('access_token');
+          localStorage.removeItem('refresh_token');
+          window.location.href = '/login';
+          return Promise.reject(refreshError);
+        }
+      }
     }
     return Promise.reject(error);
   }
 );
 
-export const authService = {
-  login: async (email: string, password: string) => {
-    const response = await api.post('/api/v1/auth/login', { email, password });
-    return response.data;
-  },
-  register: async (data: any) => {
-    const response = await api.post('/api/v1/auth/register', data);
-    return response.data;
-  },
-  me: async () => {
-    const response = await api.get<User>('/api/v1/auth/me');
-    return response.data;
-  },
-};
+// ─── Auth ───
+export const apiLogin = (data: { email: string; password: string }) =>
+  api.post('/auth/login', data);
 
-export const companyService = {
-  getAll: async () => {
-    const response = await api.get<Company[]>('/api/v1/companies');
-    return response.data;
-  },
-  getByRuc: async (ruc: string) => {
-    const response = await api.get<Company>(`/api/v1/companies/${ruc}`);
-    return response.data;
-  },
-  create: async (data: Partial<Company>) => {
-    const response = await api.post<Company>('/api/v1/companies', data);
-    return response.data;
-  },
-  update: async (id: string, data: Partial<Company>) => {
-    const response = await api.put<Company>(`/api/v1/companies/${id}`, data);
-    return response.data;
-  },
-};
+export const apiRegister = (data: { email: string; password: string; full_name: string }) =>
+  api.post('/auth/register', data);
 
-export const licenseService = {
-  getMyLicense: async () => {
-    const response = await api.get<License>('/api/v1/license');
-    return response.data;
-  },
-};
+export const apiGetMe = () => api.get('/auth/me');
 
-export const invoiceService = {
-  getAll: async (companyId: string) => {
-    const response = await api.get<Invoice[]>(`/facturacion/facturas/?company_id=${companyId}`);
-    return response.data;
-  },
-  create: async (data: Partial<Invoice>) => {
-    const response = await api.post<Invoice>('/facturacion/facturas/', data);
-    return response.data;
-  },
-  authorize: async (id: string) => {
-    const response = await api.post<Invoice>(`/facturacion/facturas/${id}/autorizar`);
-    return response.data;
-  },
-};
+// ─── Dashboard ───
+export const apiGetDashboardStats = () => api.get('/dashboard/stats');
+export const apiGetRecentActivity = (limit = 10) => api.get(`/dashboard/activity?limit=${limit}`);
+export const apiGetLicenseStatus = () => api.get('/license/status');
 
-export const productService = {
-  getAll: async (companyId: string) => {
-    const response = await api.get<Product[]>(`/inventario/productos/?company_id=${companyId}`);
-    return response.data;
-  },
-  create: async (data: Partial<Product>) => {
-    const response = await api.post<Product>('/inventario/productos/', data);
-    return response.data;
-  },
-  update: async (id: string, data: Partial<Product>) => {
-    const response = await api.put<Product>(`/inventario/productos/${id}`, data);
-    return response.data;
-  },
-};
+// ─── Companies ───
+export const apiGetCompanies = () => api.get('/companies');
+export const apiCreateCompany = (data: any) => api.post('/companies', data);
+export const apiUpdateCompany = (id: number, data: any) => api.put(`/companies/${id}`, data);
+export const apiDeleteCompany = (id: number) => api.delete(`/companies/${id}`);
+export const apiUploadLogo = (companyId: number, formData: FormData) =>
+  api.post(`/companies/${companyId}/logo`, formData, {
+    headers: { 'Content-Type': 'multipart/form-data' },
+  });
+export const apiQueryRucSRI = (ruc: string) => api.get(`/companies/lookup-ruc?ruc=${ruc}`);
 
-export const employeeService = {
-  getAll: async (companyId: string) => {
-    const response = await api.get<Employee[]>(`/api/nomina/empleados?company_id=${companyId}`);
-    return response.data;
-  },
-  create: async (data: Partial<Employee>) => {
-    const response = await api.post<Employee>('/api/nomina/empleados', data);
-    return response.data;
-  },
-};
+// ─── Invoices / Facturación ───
+export const apiGetInvoices = () => api.get('/facturacion/comprobantes');
+export const apiCreateInvoice = (data: any) => api.post('/facturacion/comprobantes', data);
+export const apiGetInvoice = (id: number) => api.get(`/facturacion/comprobantes/${id}`);
+export const apiSendInvoiceToSRI = (id: number) => api.post(`/facturacion/comprobantes/${id}/enviar-sri`);
+export const apiGetInvoiceXML = (id: number) => api.get(`/facturacion/comprobantes/${id}/xml`, { responseType: 'blob' });
+export const apiGetInvoicePDF = (id: number) => api.get(`/facturacion/comprobantes/${id}/pdf`, { responseType: 'blob' });
 
-export const adminService = {
-  getDashboardSummary: async () => {
-    const response = await api.get('/api/v1/admin/dashboard/summary');
-    return response.data;
-  },
-  getHealth: async () => {
-    const response = await api.get('/api/v1/admin/dashboard/health');
-    return response.data;
-  },
-  getUsers: async () => {
-    const response = await api.get('/api/v1/admin/users');
-    return response.data;
-  },
-  updateLicense: async (userId: string, data: any) => {
-    const response = await api.put(`/api/v1/admin/licenses/${userId}`, data);
-    return response.data;
-  },
-};
+// ─── Clients ───
+export const apiGetClients = () => api.get('/facturacion/clientes');
+export const apiCreateClient = (data: any) => api.post('/facturacion/clientes', data);
+
+// ─── Products / Inventory ───
+export const apiGetProducts = () => api.get('/inventario/productos');
+export const apiCreateProduct = (data: any) => api.post('/inventario/productos', data);
+export const apiUpdateProduct = (id: number, data: any) => api.put(`/inventario/productos/${id}`, data);
+export const apiDeleteProduct = (id: number) => api.delete(`/inventario/productos/${id}`);
+export const apiGetProductKardex = (id: number) => api.get(`/inventario/productos/${id}/kardex`);
+export const apiImportProductsExcel = (formData: FormData) =>
+  api.post('/inventario/productos/import-excel', formData, {
+    headers: { 'Content-Type': 'multipart/form-data' },
+  });
+export const apiExportProductsExcel = () =>
+  api.get('/inventario/productos/export-excel', { responseType: 'blob' });
+
+// ─── Employees / Payroll ───
+export const apiGetEmployees = () => api.get('/nomina/empleados');
+export const apiCreateEmployee = (data: any) => api.post('/nomina/empleados', data);
+export const apiUpdateEmployee = (id: number, data: any) => api.put(`/nomina/empleados/${id}`, data);
+export const apiDeleteEmployee = (id: number) => api.delete(`/nomina/empleados/${id}`);
+export const apiCalculatePayroll = (data: { period: string }) => api.post('/nomina/rol/calcular', data);
+export const apiGetPayrolls = (period: string) => api.get(`/nomina/rol?period=${period}`);
+export const apiExportPayrollExcel = (period: string) =>
+  api.get(`/nomina/rol/${period}/export-excel`, { responseType: 'blob' });
+export const apiExportPayrollPDF = (period: string) =>
+  api.get(`/nomina/rol/${period}/export-pdf`, { responseType: 'blob' });
+
+// ─── Settings ───
+export const apiGetCompanyConfig = (companyId: number) => api.get(`/companies/${companyId}/config`);
+export const apiUpdateCompanyConfig = (companyId: number, data: any) => api.put(`/companies/${companyId}/config`, data);
+export const apiUploadSignature = (companyId: number, formData: FormData) =>
+  api.post(`/companies/${companyId}/firma`, formData, {
+    headers: { 'Content-Type': 'multipart/form-data' },
+  });
+export const apiTestSMTP = (data: any) => api.post('/settings/test-smtp', data);
+export const apiUpdateBackupKey = (data: { backup_key: string }) => api.post('/settings/backup-key', data);
+
+// ─── Admin ───
+export const apiGetAdminDashboard = () => api.get('/admin/dashboard/summary');
+export const apiGetSystemHealth = () => api.get('/admin/system-health');
+export const apiGetAdminUsers = () => api.get('/admin/users');
+export const apiGetSecurityEvents = (limit = 50) => api.get(`/admin/security-events?limit=${limit}`);
+export const apiExtendLicense = (userId: number, data: { period: string }) =>
+  api.post(`/admin/users/${userId}/extend-license`, data);
+
+// ─── Files ───
+export const apiUploadFile = (formData: FormData, scanVt = false) =>
+  api.post(`/files/upload?scan_vt=${scanVt}`, formData, {
+    headers: { 'Content-Type': 'multipart/form-data' },
+  });
 
 export default api;
