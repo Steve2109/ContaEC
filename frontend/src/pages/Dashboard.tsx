@@ -1,147 +1,318 @@
-import React, { useEffect, useState } from 'react';
+import { useEffect, useState } from 'react';
+import { useTranslation } from 'react-i18next';
+import { useNavigate } from 'react-router-dom';
+import {
+  FileText,
+  Package,
+  Users,
+  DollarSign,
+  AlertTriangle,
+  Clock,
+  ArrowRight,
+  Building2,
+  Calculator,
+  Settings,
+  BarChart3,
+} from 'lucide-react';
+import {
+  apiGetDashboardStats,
+  apiGetRecentActivity,
+  apiGetLicenseStatus,
+} from '../services/api';
 import { useStore } from '../store/useStore';
-import { BarChart, Bar, LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
 
-const Dashboard: React.FC = () => {
-  const { currentCompany, license } = useStore();
-  const [stats, setStats] = useState<any>(null);
+interface DashboardStats {
+  invoices_month: number;
+  products_active: number;
+  clients_total: number;
+  revenue_month: number;
+  pending_invoices: number;
+  low_stock_count: number;
+}
+
+interface ActivityItem {
+  id: number;
+  action: string;
+  entity: string;
+  entity_id: number;
+  timestamp: string;
+  user_name: string;
+}
+
+interface LicenseStatus {
+  valid: boolean;
+  type: string;
+  expiry_date: string;
+  days_remaining: number;
+}
+
+export default function Dashboard() {
+  const { t } = useTranslation();
+  const navigate = useNavigate();
+  const { user, currentCompany } = useStore();
+
+  const [stats, setStats] = useState<DashboardStats | null>(null);
+  const [activities, setActivities] = useState<ActivityItem[]>([]);
+  const [license, setLicense] = useState<LicenseStatus | null>(null);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    // Simular carga de datos del dashboard
-    const loadStats = async () => {
+    const fetchData = async () => {
       try {
-        // En producción, cargar desde API
-        setStats({
-          totalInvoices: 156,
-          totalProducts: 89,
-          totalEmployees: 12,
-          monthlyRevenue: 25430.50,
-        });
-      } catch (error) {
-        console.error('Error loading stats:', error);
+        setLoading(true);
+        const [statsRes, activityRes, licenseRes] = await Promise.all([
+          apiGetDashboardStats(),
+          apiGetRecentActivity(10),
+          apiGetLicenseStatus(),
+        ]);
+        setStats(statsRes.data);
+        setActivities(activityRes.data || []);
+        setLicense(licenseRes.data);
+      } catch (err: any) {
+        setError(err?.response?.data?.detail || 'Error cargando dashboard');
       } finally {
         setLoading(false);
       }
     };
-    loadStats();
-  }, [currentCompany]);
+    fetchData();
+  }, [currentCompany?.id]);
 
-  const salesData = [
-    { name: 'Ene', ventas: 4000 },
-    { name: 'Feb', ventas: 3000 },
-    { name: 'Mar', ventas: 5000 },
-    { name: 'Abr', ventas: 4500 },
-    { name: 'May', ventas: 6000 },
-    { name: 'Jun', ventas: 5500 },
-  ];
+  const formatCurrency = (value: number) => {
+    return new Intl.NumberFormat('es-EC', {
+      style: 'currency',
+      currency: 'USD',
+    }).format(value || 0);
+  };
 
-  const daysUntilExpiry = license?.end_date 
-    ? Math.ceil((new Date(license.end_date).getTime() - Date.now()) / (1000 * 60 * 60 * 24))
-    : 0;
-
-  const isExpiringSoon = daysUntilExpiry > 0 && daysUntilExpiry <= 15;
+  const formatDate = (iso: string) => {
+    return new Date(iso).toLocaleDateString('es-EC', {
+      day: '2-digit',
+      month: 'short',
+      year: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+    });
+  };
 
   if (loading) {
     return (
-      <div className="flex items-center justify-center h-full">
-        <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-primary-600"></div>
+      <div className="flex items-center justify-center h-64">
+        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-emerald-600" />
       </div>
     );
   }
 
+  if (error) {
+    return (
+      <div className="rounded-lg border border-red-200 bg-red-50 p-4 text-red-700">
+        <AlertTriangle className="inline h-4 w-4 mr-2" />
+        {error}
+      </div>
+    );
+  }
+
+  const statCards = [
+    {
+      label: t('dashboard.stats.invoices'),
+      value: stats?.invoices_month ?? 0,
+      icon: FileText,
+      color: 'text-blue-600',
+      bg: 'bg-blue-50',
+      onClick: () => navigate('/invoices'),
+    },
+    {
+      label: t('dashboard.stats.products'),
+      value: stats?.products_active ?? 0,
+      icon: Package,
+      color: 'text-emerald-600',
+      bg: 'bg-emerald-50',
+      onClick: () => navigate('/products'),
+    },
+    {
+      label: t('dashboard.stats.clients'),
+      value: stats?.clients_total ?? 0,
+      icon: Users,
+      color: 'text-violet-600',
+      bg: 'bg-violet-50',
+      onClick: () => {},
+    },
+    {
+      label: t('dashboard.stats.revenue'),
+      value: formatCurrency(stats?.revenue_month || 0),
+      icon: DollarSign,
+      color: 'text-amber-600',
+      bg: 'bg-amber-50',
+      onClick: () => {},
+    },
+    {
+      label: t('dashboard.stats.pendingInvoices'),
+      value: stats?.pending_invoices ?? 0,
+      icon: Clock,
+      color: 'text-orange-600',
+      bg: 'bg-orange-50',
+      onClick: () => navigate('/invoices'),
+    },
+    {
+      label: t('dashboard.stats.lowStock'),
+      value: stats?.low_stock_count ?? 0,
+      icon: AlertTriangle,
+      color: 'text-red-600',
+      bg: 'bg-red-50',
+      onClick: () => navigate('/products'),
+    },
+  ];
+
+  const quickActions = [
+    { label: t('companies.newCompany'), icon: Building2, path: '/companies', color: 'bg-blue-600' },
+    { label: t('invoices.newInvoice'), icon: FileText, path: '/invoices', color: 'bg-emerald-600' },
+    { label: t('products.newProduct'), icon: Package, path: '/products', color: 'bg-violet-600' },
+    { label: t('employees.calculatePayroll'), icon: Calculator, path: '/employees', color: 'bg-amber-600' },
+    { label: t('settings.title'), icon: Settings, path: '/settings', color: 'bg-slate-600' },
+    { label: t('nav.admin'), icon: BarChart3, path: '/admin', color: 'bg-rose-600' },
+  ];
+
+  const showLicenseAlert = license && license.days_remaining <= 15 && license.days_remaining > 0;
+  const licenseExpired = license && license.days_remaining <= 0;
+
   return (
     <div className="space-y-6">
-      {/* Alerta de Licencia */}
-      {isExpiringSoon && (
-        <div className="bg-yellow-50 dark:bg-yellow-900/30 border-l-4 border-yellow-400 p-4 rounded-r-lg">
-          <div className="flex items-center">
-            <svg className="w-5 h-5 text-yellow-400" fill="currentColor" viewBox="0 0 20 20">
-              <path fillRule="evenodd" d="M8.257 3.099c.765-1.36 2.722-1.36 3.486 0l5.58 9.92c.75 1.334-.213 2.98-1.742 2.98H4.42c-1.53 0-2.493-1.646-1.743-2.98l5.58-9.92zM11 13a1 1 0 11-2 0 1 1 0 012 0zm-1-8a1 1 0 00-1 1v3a1 1 0 002 0V6a1 1 0 00-1-1z" clipRule="evenodd" />
-            </svg>
-            <p className="ml-3 text-yellow-700 dark:text-yellow-300">
-              Tu licencia vence en <strong>{daysUntilExpiry} días</strong>. 
-              <a href="/settings" className="underline ml-1 font-medium">Renovar ahora</a>
-            </p>
+      {/* Header */}
+      <div>
+        <h1 className="text-2xl font-semibold text-slate-900 dark:text-white">
+          {t('dashboard.welcome', { name: user?.full_name || user?.email || '' })}
+        </h1>
+        {currentCompany && (
+          <p className="text-sm text-slate-500 dark:text-slate-400 mt-1">
+            Empresa activa: <span className="font-medium">{currentCompany.razon_social}</span>
+            {currentCompany.sandbox_mode && (
+              <span className="ml-2 inline-flex items-center rounded-full bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-800">
+                🧪 Sandbox
+              </span>
+            )}
+          </p>
+        )}
+      </div>
+
+      {/* License alerts */}
+      {licenseExpired && (
+        <div className="rounded-lg border border-red-200 bg-red-50 p-4 flex items-center justify-between">
+          <div className="flex items-center gap-3">
+            <AlertTriangle className="h-5 w-5 text-red-600" />
+            <div>
+              <p className="font-medium text-red-800">Licencia vencida</p>
+              <p className="text-sm text-red-600">
+                Tu licencia venció el {new Date(license.expiry_date).toLocaleDateString('es-EC')}. Renueva para continuar usando el sistema.
+              </p>
+            </div>
           </div>
+          <button
+            onClick={() => navigate('/settings')}
+            className="rounded-md bg-red-600 px-4 py-2 text-sm font-medium text-white hover:bg-red-700"
+          >
+            {t('dashboard.licenseAlert.renew')}
+          </button>
         </div>
       )}
 
-      {/* Stats Cards */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
-        <div className="bg-white dark:bg-gray-800 rounded-xl shadow-sm p-6">
-          <h3 className="text-sm font-medium text-gray-500 dark:text-gray-400">Facturas Emitidas</h3>
-          <p className="text-3xl font-bold text-gray-900 dark:text-white mt-2">{stats?.totalInvoices || 0}</p>
+      {showLicenseAlert && (
+        <div className="rounded-lg border border-amber-200 bg-amber-50 p-4 flex items-center justify-between">
+          <div className="flex items-center gap-3">
+            <Clock className="h-5 w-5 text-amber-600" />
+            <div>
+              <p className="font-medium text-amber-800">{t('dashboard.licenseAlert.title')}</p>
+              <p className="text-sm text-amber-700">
+                {t('dashboard.licenseAlert.message', { days: license?.days_remaining })}
+              </p>
+            </div>
+          </div>
+          <button
+            onClick={() => navigate('/settings')}
+            className="rounded-md bg-amber-600 px-4 py-2 text-sm font-medium text-white hover:bg-amber-700"
+          >
+            {t('dashboard.licenseAlert.renew')}
+          </button>
         </div>
-        <div className="bg-white dark:bg-gray-800 rounded-xl shadow-sm p-6">
-          <h3 className="text-sm font-medium text-gray-500 dark:text-gray-400">Productos</h3>
-          <p className="text-3xl font-bold text-gray-900 dark:text-white mt-2">{stats?.totalProducts || 0}</p>
-        </div>
-        <div className="bg-white dark:bg-gray-800 rounded-xl shadow-sm p-6">
-          <h3 className="text-sm font-medium text-gray-500 dark:text-gray-400">Empleados</h3>
-          <p className="text-3xl font-bold text-gray-900 dark:text-white mt-2">{stats?.totalEmployees || 0}</p>
-        </div>
-        <div className="bg-white dark:bg-gray-800 rounded-xl shadow-sm p-6">
-          <h3 className="text-sm font-medium text-gray-500 dark:text-gray-400">Ingresos Mensuales</h3>
-          <p className="text-3xl font-bold text-primary-600 dark:text-primary-400 mt-2">
-            ${stats?.monthlyRevenue?.toFixed(2) || '0.00'}
-          </p>
+      )}
+
+      {/* Stats grid */}
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
+        {statCards.map((card) => (
+          <button
+            key={card.label}
+            onClick={card.onClick}
+            className="flex items-center gap-4 rounded-xl border border-slate-200 bg-white p-4 text-left shadow-sm transition hover:shadow-md dark:border-slate-700 dark:bg-slate-800"
+          >
+            <div className={`flex h-12 w-12 items-center justify-center rounded-lg ${card.bg}`}>
+              <card.icon className={`h-6 w-6 ${card.color}`} />
+            </div>
+            <div>
+              <p className="text-sm text-slate-500 dark:text-slate-400">{card.label}</p>
+              <p className="text-xl font-semibold text-slate-900 dark:text-white">{card.value}</p>
+            </div>
+          </button>
+        ))}
+      </div>
+
+      {/* Quick actions */}
+      <div>
+        <h2 className="text-lg font-semibold text-slate-900 dark:text-white mb-3">
+          {t('dashboard.quickActions')}
+        </h2>
+        <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
+          {quickActions.map((action) => (
+            <button
+              key={action.path}
+              onClick={() => navigate(action.path)}
+              className="flex flex-col items-center gap-2 rounded-xl border border-slate-200 bg-white p-4 transition hover:shadow-md dark:border-slate-700 dark:bg-slate-800"
+            >
+              <div className={`flex h-10 w-10 items-center justify-center rounded-lg ${action.color}`}>
+                <action.icon className="h-5 w-5 text-white" />
+              </div>
+              <span className="text-xs font-medium text-slate-700 dark:text-slate-300 text-center">
+                {action.label}
+              </span>
+            </button>
+          ))}
         </div>
       </div>
 
-      {/* Gráficos */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        <div className="bg-white dark:bg-gray-800 rounded-xl shadow-sm p-6">
-          <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-4">Ventas por Mes</h3>
-          <ResponsiveContainer width="100%" height={300}>
-            <BarChart data={salesData}>
-              <CartesianGrid strokeDasharray="3 3" />
-              <XAxis dataKey="name" />
-              <YAxis />
-              <Tooltip />
-              <Bar dataKey="ventas" fill="#0ea5e9" />
-            </BarChart>
-          </ResponsiveContainer>
+      {/* Recent activity */}
+      <div className="rounded-xl border border-slate-200 bg-white dark:border-slate-700 dark:bg-slate-800">
+        <div className="flex items-center justify-between border-b border-slate-100 px-4 py-3 dark:border-slate-700">
+          <h3 className="font-semibold text-slate-900 dark:text-white">
+            {t('dashboard.recentActivity')}
+          </h3>
         </div>
-
-        <div className="bg-white dark:bg-gray-800 rounded-xl shadow-sm p-6">
-          <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-4">Tendencia de Ventas</h3>
-          <ResponsiveContainer width="100%" height={300}>
-            <LineChart data={salesData}>
-              <CartesianGrid strokeDasharray="3 3" />
-              <XAxis dataKey="name" />
-              <YAxis />
-              <Tooltip />
-              <Line type="monotone" dataKey="ventas" stroke="#0ea5e9" strokeWidth={2} />
-            </LineChart>
-          </ResponsiveContainer>
-        </div>
-      </div>
-
-      {/* Información de Licencia */}
-      <div className="bg-white dark:bg-gray-800 rounded-xl shadow-sm p-6">
-        <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-4">Estado de Licencia</h3>
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-          <div>
-            <p className="text-sm text-gray-500 dark:text-gray-400">Tipo</p>
-            <p className="font-medium text-gray-900 dark:text-white capitalize">{license?.type || 'N/A'}</p>
-          </div>
-          <div>
-            <p className="text-sm text-gray-500 dark:text-gray-400">Inicio</p>
-            <p className="font-medium text-gray-900 dark:text-white">
-              {license?.start_date ? new Date(license.start_date).toLocaleDateString('es-EC') : 'N/A'}
+        <div className="divide-y divide-slate-100 dark:divide-slate-700">
+          {activities.length === 0 ? (
+            <p className="px-4 py-6 text-sm text-slate-500 dark:text-slate-400 text-center">
+              {t('common.noData')}
             </p>
-          </div>
-          <div>
-            <p className="text-sm text-gray-500 dark:text-gray-400">Vencimiento</p>
-            <p className={`font-medium ${isExpiringSoon ? 'text-red-600' : 'text-green-600'}`}>
-              {license?.end_date ? new Date(license.end_date).toLocaleDateString('es-EC') : 'N/A'}
-            </p>
-          </div>
+          ) : (
+            activities.map((item) => (
+              <div
+                key={item.id}
+                className="flex items-center justify-between px-4 py-3 hover:bg-slate-50 dark:hover:bg-slate-700/50"
+              >
+                <div className="flex items-center gap-3">
+                  <div className="flex h-8 w-8 items-center justify-center rounded-full bg-slate-100 dark:bg-slate-700">
+                    <ArrowRight className="h-4 w-4 text-slate-500" />
+                  </div>
+                  <div>
+                    <p className="text-sm font-medium text-slate-900 dark:text-white">
+                      {item.action} — {item.entity} #{item.entity_id}
+                    </p>
+                    <p className="text-xs text-slate-500 dark:text-slate-400">
+                      {item.user_name} · {formatDate(item.timestamp)}
+                    </p>
+                  </div>
+                </div>
+              </div>
+            ))
+          )}
         </div>
       </div>
     </div>
   );
-};
-
-export default Dashboard;
+}
