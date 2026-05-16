@@ -15,8 +15,8 @@ from collections import defaultdict, deque
 
 from .core.config import settings
 from .core.database import engine, Base, get_db
-from .api import auth, admin, files
-from .routes import facturacion, inventario, pos, bi, budget, purchase, warehouse, crm, projects, integrations, ai, nomina
+from .api import auth, admin, files, dashboard, settings as settings_api, companies
+from .routes import facturacion, inventario, pos, bi, budget, purchase, warehouse, crm, projects, integrations, ai, nomina, kardex
 from .services.auth_service import UserService, LicenseService
 from .services.backup_service import BackupService
 from .models import User, License, LicenseType
@@ -171,8 +171,12 @@ async def global_exception_handler(request: Request, exc: Exception):
 app.include_router(auth.router)
 app.include_router(admin.router)
 app.include_router(files.router)
+app.include_router(dashboard.router)
+app.include_router(settings_api.router)
+app.include_router(companies.router)
 app.include_router(facturacion.router)
 app.include_router(inventario.router)
+app.include_router(kardex.router)
 app.include_router(pos.router)
 app.include_router(bi.router)
 app.include_router(budget.router)
@@ -202,15 +206,11 @@ async def root():
 
 
 @app.get("/health")
-@limiter.limit("10/minute")
-async def health_check(request: Request):
+async def health_check():
     """
-    Endpoint de verificación de salud
+    Health check endpoint
     """
-    return {
-        "status": "healthy",
-        "timestamp": datetime.utcnow().isoformat()
-    }
+    return {"status": "healthy", "timestamp": datetime.utcnow().isoformat()}
 
 
 # Exportar app para uvicorn
