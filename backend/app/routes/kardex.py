@@ -1,27 +1,24 @@
 """
 Kárdex — movimientos de inventario (entradas/salidas/ajustes).
-Adaptado para SQLAlchemy sincrónico (igual que el resto del backend).
 """
 from fastapi import APIRouter, Depends, HTTPException, status
-from sqlalchemy.orm import Session
-from sqlalchemy import and_, desc
-from typing import List, Optional, Dict, Any
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import select, func, and_, desc
+from typing import List, Optional
 from datetime import datetime
 from pydantic import BaseModel
 
-from app.utils.dependencies import get_current_user
-from app.core.dependencies import get_current_empresa
-from app.core.database import get_db
+from app.core.dependencies import get_db, get_current_active_user
 from app.models.inventario import Producto, MovimientoInventario
 
-router = APIRouter(prefix="/inventario/kardex", tags=["Kárdex"])
+router = APIRouter(prefix="/kardex", tags=["Kárdex"])
 
 
 # ─── Schemas ───
 
 class KardexEntry(BaseModel):
     date: datetime
-    type: str
+    type: str  # 'entrada', 'salida', 'ajuste', 'devolucion', 'compra', 'venta'
     document: Optional[str] = None
     quantity: int
     unit_cost: float
@@ -45,34 +42,42 @@ class KardexSummary(BaseModel):
 
 # ─── Routes ───
 
-@router.get("/producto/{producto_id}", response_model=KardexSummary)
+@router.get("/product/{product_id}", response_model=KardexSummary)
 async def get_kardex_by_product(
-    producto_id: int,
+    product_id: int,
     start_date: Optional[datetime] = None,
     end_date: Optional[datetime] = None,
     limit: int = 100,
-    db: Session = Depends(get_db),
-    current_user = Depends(get_current_user),
-    empresa = Depends(get_current_empresa)
+    db: AsyncSession = Depends(get_db),
+    current_user = Depends(get_current_active_user)
 ):
     """Obtiene el kárdex completo de un producto."""
-    producto = db.query(Producto).filter(
-        and_(Producto.id == producto_id, Producto.empresa_id == empresa.id)
-    ).first()
+    # Verificar producto
+    product_result = await db.execute(
+        select(Producto).where(
+            Producto.id == product_id,
+            Producto.user_id == current_user.id
+        )
+    )
+    producto = product_result.scalar_one_or_none()
     if not producto:
         raise HTTPException(status_code=404, detail="Producto no encontrado")
 
-    query = db.query(MovimientoInventario).filter(
-        MovimientoInventario.producto_id == producto_id
+    # Movimientos
+    query = select(MovimientoInventario).where(
+        MovimientoInventario.producto_id == product_id
     ).order_by(desc(MovimientoInventario.fecha))
 
     if start_date:
-        query = query.filter(MovimientoInventario.fecha >= start_date)
+        query = query.where(MovimientoInventario.fecha >= start_date)
     if end_date:
-        query = query.filter(MovimientoInventario.fecha <= end_date)
+        query = query.where(MovimientoInventario.fecha <= end_date)
 
-    movements = query.limit(limit).all()
+    query = query.limit(limit)
+    result = await db.execute(query)
+    movements = result.scalars().all()
 
+    # Calcular totales
     entries = sum(1 for m in movements if m.tipo in ('entrada', 'compra', 'devolucion'))
     exits = sum(1 for m in movements if m.tipo in ('salida', 'venta'))
     avg_cost = float(producto.costo_promedio) if producto.costo_promedio else 0.0
@@ -94,72 +99,43 @@ async def get_kardex_by_product(
     return {
         "product_id": producto.id,
         "product_name": producto.nombre,
-        "product_code": producto.codigo_interno or producto.codigo_principal or str(producto.id),
-        "current_stock": getattr(producto, 'stock', 0),
+        "product_code": producto.codigo,
+        "current_stock": producto.stock,
         "total_entries": entries,
         "total_exits": exits,
         "average_cost": round(avg_cost, 4),
-        "total_value": round(avg_cost * getattr(producto, 'stock', 0), 2),
+        "total_value": round(avg_cost * producto.stock, 2),
         "movements": movement_data,
     }
 
 
-@router.get("/alertas-stock-bajo")
+@router.get("/low-stock")
 async def get_low_stock(
-    db: Session = Depends(get_db),
-    current_user = Depends(get_current_user),
-    empresa = Depends(get_current_empresa)
+    db: AsyncSession = Depends(get_db),
+    current_user = Depends(get_current_active_user)
 ):
     """Productos con stock bajo (bajo el mínimo)."""
-    productos = db.query(Producto).filter(
-        and_(
-            Producto.empresa_id == empresa.id,
-            Producto.stock <= Producto.stock_minimo,
-            Producto.stock_minimo > 0
-        )
-    ).order_by(desc(Producto.stock_minimo - Producto.stock)).all()
+    result = await db.execute(
+        select(Producto).where(
+            and_(
+                Producto.user_id == current_user.id,
+                Producto.stock <= Producto.stock_minimo,
+                Producto.stock_minimo > 0
+            )
+        ).order_by(desc(Producto.stock_minimo - Producto.stock))
+    )
+    productos = result.scalars().all()
 
     return [
         {
             "id": p.id,
-            "code": p.codigo_interno or p.codigo_principal,
+            "code": p.codigo,
             "name": p.nombre,
-            "stock": getattr(p, 'stock', 0),
+            "stock": p.stock,
             "min_stock": p.stock_minimo,
-            "shortage": p.stock_minimo - getattr(p, 'stock', 0),
-            "unit": getattr(p, 'unidad_medida', 'UNID'),
-            "category": getattr(p, 'categoria', None),
+            "shortage": p.stock_minimo - p.stock,
+            "unit": p.unidad_medida,
+            "category": p.categoria,
         }
         for p in productos
     ]
-
-
-@router.get("/resumen")
-async def get_kardex_summary(
-    db: Session = Depends(get_db),
-    current_user = Depends(get_current_user),
-    empresa = Depends(get_current_empresa)
-):
-    """Resumen global de movimientos del inventario."""
-    total_products = db.query(Producto).filter(Producto.empresa_id == empresa.id).count()
-
-    low_stock = db.query(Producto).filter(
-        and_(
-            Producto.empresa_id == empresa.id,
-            Producto.stock <= Producto.stock_minimo,
-            Producto.stock_minimo > 0
-        )
-    ).count()
-
-    # Valor total del inventario
-    from sqlalchemy import func
-    total_value = db.query(func.coalesce(
-        func.sum(Producto.costo_promedio * Producto.stock), 0.0
-    )).filter(Producto.empresa_id == empresa.id).scalar() or 0.0
-
-    return {
-        "total_products": total_products,
-        "low_stock_count": low_stock,
-        "inventory_value": round(float(total_value), 2),
-        "alert": low_stock > 0,
-    }
