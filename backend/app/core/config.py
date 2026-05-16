@@ -1,67 +1,92 @@
-"""
-Configuración central de la aplicación ContaEC
-"""
-from pydantic_settings import BaseSettings
-from typing import Optional, List
 import os
+from functools import lru_cache
+from typing import List, Optional
+
+from pydantic_settings import BaseSettings
 
 
 class Settings(BaseSettings):
-    # Base de datos
-    DATABASE_URL: str = "postgresql://conta_user:SecurePass2024@localhost:5432/contaec_db"
-    
-    # Configuración del servidor
-    HOST: str = "0.0.0.0"
-    PORT: int = 80
-    DEBUG: bool = False
-    
-    # JWT Configuration
-    JWT_SECRET_KEY: str = "tu_clave_secreta_muy_segura_cambiala_en_produccion"
-    JWT_ALGORITHM: str = "HS256"
+    # Base
+    DATABASE_URL: str
+    SECRET_KEY: str
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 30
     REFRESH_TOKEN_EXPIRE_DAYS: int = 7
-    
-    # Clave maestra para encriptación
-    MASTER_ENCRYPTION_KEY: str = "cambia_esta_clave_maestra_por_una_mas_segura"
-    
-    # Rutas de archivos
-    BASE_DIR: str = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-    UPLOAD_FOLDER: str = os.path.join(BASE_DIR, "static", "uploads")
-    TEMP_UPLOAD_FOLDER: str = os.path.join(BASE_DIR, "static", "uploads", "temp")
-    PERMANENT_UPLOAD_FOLDER: str = os.path.join(BASE_DIR, "static", "uploads", "permanent")
-    EXPORT_TEMP_FOLDER: str = os.path.join(BASE_DIR, "static", "exports", "temp")
-    BACKUP_FOLDER: str = os.path.join(BASE_DIR, "backups")
-    TEMP_FILE_TTL_MINUTES: int = 60
-    
-    # ClamAV Configuration
-    CLAMAV_ENABLED: bool = True
-    CLAMAV_SOCKET: str = "/var/run/clamav/clamd.ctl"
-    
-    # VirusTotal API
-    VIRUSTOTAL_API_KEY: Optional[str] = None
-    
-    # Admin por defecto
+    ENVIRONMENT: str = "production"
+
+    # CORS
+    CORS_ORIGINS: str = "http://localhost:5173,http://10.0.1.20"
+
+    # Admin (sin defaults de seguridad)
     ADMIN_EMAIL: str = "steve.mejia@tymtechnology.shop"
-    ADMIN_PASSWORD: str = "Vitaestcum21.."
-    
-    # Aplicación
+    ADMIN_PASSWORD: str  # REQUERIDO — sin valor por defecto
+
+    # ClamAV
+    CLAMD_SOCKET: str = "/var/run/clamav/clamd.ctl"
+    CLAMD_TIMEOUT: int = 30
+
+    # VirusTotal (opcional)
+    VT_API_KEY: Optional[str] = None
+
+    # Backup encryption
+    BACKUP_KEY: str
+
+    # SMTP (opcional)
+    SMTP_HOST: Optional[str] = None
+    SMTP_PORT: int = 587
+    SMTP_USER: Optional[str] = None
+    SMTP_PASSWORD: Optional[str] = None
+    SMTP_TLS: bool = True
+
+    # File uploads
+    MAX_UPLOAD_SIZE_MB: int = 10
+    UPLOAD_ALLOWED_EXTENSIONS: str = ".xlsx,.xls,.csv,.pdf,.zip,.xml,.json,.png,.jpg,.jpeg"
+
+    # SRI
+    SRI_WS_URL_PROD: str = "https://cel.sri.gob.ec/comprobantes-electronicos-ws/RecepcionComprobantesOffline?wsdl"
+    SRI_WS_URL_TEST: str = "https://celcer.sri.gob.ec/comprobantes-electronicos-ws/RecepcionComprobantesOffline?wsdl"
+    SRI_CONSULTA_RUC_URL: str = "https://srienlinea.sri.gob.ec/sri-catastro-sujeto-servicio-internet/rest/ConsolidadoContribuyente/existePorNumeroRuc"
+
+    # App metadata
     APP_NAME: str = "ContaEC"
-    DEVELOPER: str = "T&M Technology Ec"
-    SUPPORT_PHONE: str = "0960068866"
-    SUPPORT_EMAIL: str = "info@tymtechnology.shop"
+    APP_AUTHOR: str = "T&M Technology Ec"
+    APP_CONTACT_PHONE: str = "0960068866"
+    APP_SUPPORT_EMAIL: str = "info@tymtechnology.shop"
     APP_DOMAIN: str = "conta.tymtechnology.shop"
-    
-    # Rate Limiting
-    RATE_LIMIT_PER_MINUTE: int = 60
-    CORS_ORIGINS: str = "https://conta.tymtechnology.shop,http://10.0.1.20"
-    
-    # Logging
-    LOG_LEVEL: str = "INFO"
-    LOG_FILE: str = "/workspace/backend/logs/app.log"
-    
+
     class Config:
         env_file = ".env"
+        env_file_encoding = "utf-8"
         case_sensitive = True
 
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        # 🔒 Seguridad: forzar que ADMIN_PASSWORD venga del .env
+        raw_admin_pass = os.environ.get("ADMIN_PASSWORD", "")
+        if not raw_admin_pass or raw_admin_pass.strip() == "":
+            raise ValueError(
+                "[CRÍTICO] ADMIN_PASSWORD no está definido en el archivo .env. "
+                "Por seguridad, la contraseña de administrador NO puede tener un valor por defecto. "
+                "Agrega: ADMIN_PASSWORD=TuContraseñaSegura123 al archivo .env antes de iniciar la aplicación."
+            )
+        # Validar longitud mínima
+        if len(self.ADMIN_PASSWORD) < 8:
+            raise ValueError(
+                "ADMIN_PASSWORD debe tener al menos 8 caracteres."
+            )
 
-settings = Settings()
+    @property
+    def cors_origins_list(self) -> List[str]:
+        return [origin.strip() for origin in self.CORS_ORIGINS.split(",")]
+
+    @property
+    def upload_allowed_extensions_list(self) -> List[str]:
+        return [ext.strip().lower() for ext in self.UPLOAD_ALLOWED_EXTENSIONS.split(",")]
+
+    @property
+    def max_upload_size_bytes(self) -> int:
+        return self.MAX_UPLOAD_SIZE_MB * 1024 * 1024
+
+
+@lru_cache()
+def get_settings() -> Settings:
+    return Settings()
