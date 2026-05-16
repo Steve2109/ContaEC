@@ -1,0 +1,38 @@
+[Unit]
+Description=ContaEC - Sistema Contable T&M Technology Ec
+Documentation=https://conta.tymtechnology.shop
+After=network.target postgresql.service clamav-daemon.service
+Wants=postgresql.service clamav-daemon.service
+
+[Service]
+Type=simple
+User=contaec
+Group=contaec
+WorkingDirectory=/opt/contaec/backend
+Environment=PATH=/opt/contaec/backend/venv/bin
+Environment=PYTHONPATH=/opt/contaec/backend
+ExecStart=/opt/contaec/backend/venv/bin/uvicorn app.main:app --host 0.0.0.0 --port 8000 --workers 3
+ExecReload=/bin/kill -s HUP $MAINPID
+KillMode=mixed
+Restart=on-failure
+RestartSec=5s
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=contaec
+
+# Seguridad: restricciones de sistema de archivos
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/tmp/contaec_uploads /opt/contaec/backend/logs
+
+# Límites de recursos (ajustar según LXC: 3 cores, 6GB libres)
+LimitAS=4G
+LimitRSS=2G
+LimitNOFILE=65535
+LimitNPROC=512
+
+# Tiempo de espera para shutdown graceful
+TimeoutStopSec=30
+
+[Install]
+WantedBy=multi-user.target
