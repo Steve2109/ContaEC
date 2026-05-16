@@ -1,18 +1,17 @@
 """
 Settings API — test SMTP, backup key, language, sandbox toggle.
-Adaptado para SQLAlchemy sincrónico.
 """
 import os
+import asyncio
 from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File
 from pydantic import BaseModel, Field
 from typing import Optional
-from sqlalchemy.orm import Session
 
-from app.core.dependencies import get_current_user_sync, get_current_admin_user_sync, get_db_sync
-from app.core.security import encrypt_sensitive_data, decrypt_sensitive_data
+from app.core.dependencies import get_current_user, get_current_active_user
+from app.core.security import encrypt_data, decrypt_data
 from app.core.config import settings
 
-router = APIRouter(prefix="/api/v1/settings", tags=["Settings"])
+router = APIRouter(prefix="/settings", tags=["Settings"])
 
 
 # ─── Schemas ───
@@ -40,12 +39,17 @@ class SandboxToggleRequest(BaseModel):
     sandbox: bool
 
 
+class SMTPTestResponse(BaseModel):
+    success: bool
+    message: str
+
+
 # ─── Routes ───
 
-@router.post("/test-smtp")
+@router.post("/test-smtp", response_model=SMTPTestResponse)
 async def test_smtp(
     data: SMTPTestRequest,
-    current_user = Depends(get_current_user_sync)
+    current_user = Depends(get_current_active_user)
 ):
     """Envía un correo de prueba con los parámetros SMTP proporcionados."""
     try:
@@ -70,34 +74,25 @@ async def test_smtp(
         await smtp.send_message(msg)
         await smtp.quit()
 
-        return {"success": True, "message": "Correo de prueba enviado correctamente"}
+        return SMTPTestResponse(success=True, message="Correo de prueba enviado correctamente")
     except Exception as e:
-        return {"success": False, "message": f"Error SMTP: {str(e)}"}
+        return SMTPTestResponse(success=False, message=f"Error SMTP: {str(e)}")
 
 
 @router.post("/backup-key")
 async def set_backup_key(
     data: BackupKeyRequest,
-    db: Session = Depends(get_db_sync),
-    current_user = Depends(get_current_user_sync)
+    current_user = Depends(get_current_active_user)
 ):
-    """Guarda la clave de encriptación de backups del usuario (encriptada en BD)."""
-    # Encriptar la clave con la llave maestra del sistema
-    encrypted = encrypt_sensitive_data(data.backup_key)
-    
-    from app.models import UserConfiguration
-    
-    # Buscar o crear configuración del usuario
-    config = db.query(UserConfiguration).filter(
-        UserConfiguration.user_id == current_user.id
-    ).first()
-    
-    if not config:
-        config = UserConfiguration(user_id=current_user.id)
-        db.add(config)
-    
-    config.encrypted_backup_key = encrypted
-    db.commit()
+    """Guarda la clave de encriptación de backups del usuario (encriptada)."""
+    from sqlalchemy.ext.asyncio import AsyncSession
+    from app.core.database import async_session_maker
+
+    async with async_session_maker() as db:
+        # Encriptar la clave con la llave maestra del sistema
+        encrypted = encrypt_data(data.backup_key)
+        current_user.encrypted_backup_key = encrypted
+        await db.commit()
 
     return {"success": True, "message": "Clave de backup configurada"}
 
@@ -105,22 +100,15 @@ async def set_backup_key(
 @router.post("/language")
 async def set_language(
     data: LanguageRequest,
-    db: Session = Depends(get_db_sync),
-    current_user = Depends(get_current_user_sync)
+    current_user = Depends(get_current_active_user)
 ):
     """Guarda preferencia de idioma del usuario."""
-    from app.models import UserConfiguration
-    
-    config = db.query(UserConfiguration).filter(
-        UserConfiguration.user_id == current_user.id
-    ).first()
-    
-    if not config:
-        config = UserConfiguration(user_id=current_user.id)
-        db.add(config)
-    
-    config.language = data.language
-    db.commit()
+    from sqlalchemy.ext.asyncio import AsyncSession
+    from app.core.database import async_session_maker
+
+    async with async_session_maker() as db:
+        current_user.language = data.language
+        await db.commit()
 
     return {"success": True, "language": data.language}
 
@@ -128,22 +116,27 @@ async def set_language(
 @router.post("/sandbox")
 async def toggle_sandbox(
     data: SandboxToggleRequest,
-    db: Session = Depends(get_db_sync),
-    current_user = Depends(get_current_user_sync)
+    current_user = Depends(get_current_active_user)
 ):
     """Activa/desactiva modo sandbox para una empresa del usuario."""
-    from app.models import Company
-    
-    empresa = db.query(Company).filter(
-        Company.id == data.company_id,
-        Company.owner_id == current_user.id
-    ).first()
-    
-    if not empresa:
-        raise HTTPException(status_code=404, detail="Empresa no encontrada")
+    from sqlalchemy.ext.asyncio import AsyncSession
+    from sqlalchemy import select
+    from app.core.database import async_session_maker
+    from app.models.facturacion import Empresa
 
-    empresa.modo_sandbox = data.sandbox
-    db.commit()
+    async with async_session_maker() as db:
+        result = await db.execute(
+            select(Empresa).where(
+                Empresa.id == data.company_id,
+                Empresa.user_id == current_user.id
+            )
+        )
+        empresa = result.scalar_one_or_none()
+        if not empresa:
+            raise HTTPException(status_code=404, detail="Empresa no encontrada")
+
+        empresa.modo_sandbox = data.sandbox
+        await db.commit()
 
     mode = "pruebas" if data.sandbox else "producción"
     return {"success": True, "message": f"Modo {mode} activado", "sandbox": data.sandbox}
